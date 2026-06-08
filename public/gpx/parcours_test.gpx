@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="La Backyard des Mools"
+     xmlns="http://www.topografix.com/GPX/1/1"
+     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+     xsi:schemaLocation="http://www.topografix.com/GPX/1/1 http://www.topografix.com/GPX/1/1/gpx.xsd">
+  <metadata>
+    <name>Boucle Backyard des Mools – 6,7 km</name>
+    <desc>Tracé placeholder — à remplacer par le tracé officiel</desc>
+  </metadata>
+  <trk>
+    <name>Boucle Richelieu 6,7 km</name>
+    <trkseg>
+      <trkpt lat="47.0072" lon="0.3394"><ele>42</ele></trkpt>
+      <trkpt lat="47.0085" lon="0.3387"><ele>44</ele></trkpt>
+      <trkpt lat="47.0098" lon="0.3378"><ele>47</ele></trkpt>
+      <trkpt lat="47.0110" lon="0.3362"><ele>51</ele></trkpt>
+      <trkpt lat="47.0122" lon="0.3342"><ele>55</ele></trkpt>
+      <trkpt lat="47.0131" lon="0.3318"><ele>58</ele></trkpt>
+      <trkpt lat="47.0137" lon="0.3290"><ele>60</ele></trkpt>
+      <trkpt lat="47.0140" lon="0.3260"><ele>62</ele></trkpt>
+      <trkpt lat="47.0140" lon="0.3235"><ele>61</ele></trkpt>
+      <trkpt lat="47.0136" lon="0.3208"><ele>59</ele></trkpt>
+      <trkpt lat="47.0128" lon="0.3185"><ele>56</ele></trkpt>
+      <trkpt lat="47.0117" lon="0.3165"><ele>53</ele></trkpt>
+      <trkpt lat="47.0105" lon="0.3148"><ele>50</ele></trkpt>
+      <trkpt lat="47.0091" lon="0.3133"><ele>47</ele></trkpt>
+      <trkpt lat="47.0079" lon="0.3118"><ele>45</ele></trkpt>
+      <trkpt lat="47.0072" lon="0.3104"><ele>43</ele></trkpt>
+      <trkpt lat="47.0058" lon="0.3110"><ele>44</ele></trkpt>
+      <trkpt lat="47.0046" lon="0.3119"><ele>45</ele></trkpt>
+      <trkpt lat="47.0036" lon="0.3132"><ele>46</ele></trkpt>
+      <trkpt lat="47.0026" lon="0.3150"><ele>47</ele></trkpt>
+      <trkpt lat="47.0017" lon="0.3170"><ele>48</ele></trkpt>
+      <trkpt lat="47.0010" lon="0.3193"><ele>47</ele></trkpt>
+      <trkpt lat="47.0006" lon="0.3217"><ele>46</ele></trkpt>
+      <trkpt lat="47.0004" lon="0.3242"><ele>44</ele></trkpt>
+      <trkpt lat="47.0004" lon="0.3268"><ele>43</ele></trkpt>
+      <trkpt lat="47.0007" lon="0.3292"><ele>43</ele></trkpt>
+      <trkpt lat="47.0013" lon="0.3315"><ele>44</ele></trkpt>
+      <trkpt lat="47.0021" lon="0.3336"><ele>45</ele></trkpt>
+      <trkpt lat="47.0031" lon="0.3353"><ele>46</ele></trkpt>
+      <trkpt lat="47.0042" lon="0.3366"><ele>45</ele></trkpt>
+      <trkpt lat="47.0053" lon="0.3378"><ele>44</ele></trkpt>
+      <trkpt lat="47.0063" lon="0.3387"><ele>43</ele></trkpt>
+      <trkpt lat="47.0072" lon="0.3394"><ele>42</ele></trkpt>
+    </trkseg>
+  </trk>
+</gpx>
