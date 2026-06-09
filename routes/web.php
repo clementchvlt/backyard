@@ -24,6 +24,14 @@ Route::get('/contact', function () {
     return Inertia::render('Contact');
 })->name('contact');
 
+Route::get('/connexion', function () {
+    return Inertia::render('LoginPage');
+})->name('connexion');
+
+Route::get('/admin', function () {
+    return Inertia::render('AdminPortal');
+})->name('admin');
+
 Route::get('/dashboard', function () {
     return Inertia::render('Dashboard');
 })->middleware(['auth', 'verified'])->name('dashboard');

@@ -7,6 +7,7 @@ const navLinks = [
     { label: 'INFORMATIONS', href: '/informations' },
     { label: 'RÉSULTATS', href: '/resultats' },
     { label: 'CONTACT', href: '/contact' },
+    { label: 'CONNEXION', href: '/connexion' },
 ];
 
 export default function MainLayout({ children }) {
