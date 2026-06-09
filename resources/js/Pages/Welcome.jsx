@@ -13,7 +13,7 @@ export default function Welcome() {
                     </p>
 
                     <img
-                        src="/images/logo.svg"
+                        src="/images/Logo du bg 2.svg"
                         alt="La Backyard des Mools"
                         className="w-96 md:w-[32rem] mb-6"
                     />
