@@ -2,6 +2,19 @@ import { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import 'leaflet-gpx';
+import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
+import markerIcon from 'leaflet/dist/images/marker-icon.png';
+import markerShadow from 'leaflet/dist/images/marker-shadow.png';
+
+const defaultTrackMarker = L.icon({
+    iconRetinaUrl: markerIcon2x,
+    iconUrl: markerIcon,
+    shadowUrl: markerShadow,
+    iconSize: [25, 41],
+    iconAnchor: [12, 41],
+    popupAnchor: [1, -34],
+    shadowSize: [41, 41],
+});
 
 export default function GpxMap({ gpxUrl, height = '460px' }) {
     const containerRef = useRef(null);
@@ -29,10 +42,12 @@ export default function GpxMap({ gpxUrl, height = '460px' }) {
         if (gpxUrl) {
             new L.GPX(gpxUrl, {
                 async: true,
+                markers: {
+                    startIcon: defaultTrackMarker,
+                    endIcon: defaultTrackMarker,
+                },
                 marker_options: {
-                    startIconUrl: null,
-                    endIconUrl: null,
-                    shadowUrl: null,
+                    clickable: false,
                 },
                 polyline_options: {
                     color: '#B8922A',
