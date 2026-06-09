@@ -21,11 +21,11 @@ export default function Contact() {
             <Head title="Contact" />
             <MainLayout>
                 {/* Page hero */}
-                <section className="bg-creme py-20 px-6 text-center border-b border-gray-100">
+                <section className="bg-creme py-10 px-6 text-center border-b border-gray-100">
                     <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">
                         Nous écrire
                     </p>
-                    <h1 className="font-serif text-4xl md:text-5xl text-noir">
+                    <h1 className="font-chau text-4xl md:text-5xl text-noir">
                         Contact
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
@@ -38,7 +38,7 @@ export default function Contact() {
                     <div className="max-w-lg mx-auto">
                         {sent ? (
                             <div className="text-center py-12">
-                                <p className="font-serif text-2xl text-or-principal mb-3">Message envoyé</p>
+                                <p className="font-chau text-2xl text-or-principal mb-3">Message envoyé</p>
                                 <p className="text-sm text-gris">Nous reviendrons vers vous très bientôt.</p>
                             </div>
                         ) : (

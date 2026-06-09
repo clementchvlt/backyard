@@ -25,6 +25,7 @@ export default {
             fontFamily: {
                 sans: ['Montserrat', ...defaultTheme.fontFamily.sans],
                 serif: ['"Playfair Display"', ...defaultTheme.fontFamily.serif],
+                chau: ['"Chau Philomene One"', ...defaultTheme.fontFamily.sans],
             },
         },
     },

@@ -12,9 +12,9 @@ Route::get('/parcours', function () {
     return Inertia::render('Parcours');
 })->name('parcours');
 
-Route::get('/inscription', function () {
-    return Inertia::render('Inscription');
-})->name('inscription');
+Route::get('/informations', function () {
+    return Inertia::render('Informations');
+})->name('informations');
 
 Route::get('/resultats', function () {
     return Inertia::render('Resultats');

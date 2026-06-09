@@ -31,11 +31,11 @@ export default function Parcours() {
             <Head title="Parcours" />
             <MainLayout>
                 {/* Page hero */}
-                <section className="bg-creme py-20 px-6 text-center border-b border-gray-100">
+                <section className="bg-creme py-10 px-6 text-center border-b border-gray-100">
                     <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">
                         La Course
                     </p>
-                    <h1 className="font-serif text-4xl md:text-5xl text-noir">
+                    <h1 className="font-chau text-4xl md:text-5xl text-noir">
                         Le Parcours
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
@@ -44,9 +44,9 @@ export default function Parcours() {
                 </section>
 
                 {/* GPX Map */}
-                <section className="bg-white border-b border-gray-100">
+                <section className=" border-b border-gray-100">
                     <GpxMap gpxUrl="/gpx/parcours.gpx" height="480px" />
-                    <div className="flex items-center justify-between px-6 py-3 bg-white border-t border-gray-100">
+                    <div className="flex items-center justify-between px-6 py-3  border-t border-gray-100">
                         <p className="text-[10px] tracking-[0.15em] uppercase text-gris">
                             Tracé de la boucle · 6,7 km
                         </p>
@@ -61,22 +61,12 @@ export default function Parcours() {
                 </section>
 
                 {/* Key facts */}
-                <section className="bg-white py-16 px-6">
-                    <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-px bg-gray-100">
-                        {features.map((f) => (
-                            <div key={f.label} className="bg-white flex flex-col items-center text-center py-10 px-4">
-                                <span className="font-serif text-3xl text-or-principal">{f.value}</span>
-                                <span className="text-[10px] tracking-[0.2em] text-gris uppercase mt-2 mb-3">{f.label}</span>
-                                <span className="text-xs text-gris">{f.desc}</span>
-                            </div>
-                        ))}
-                    </div>
-                </section>
+                
 
                 {/* Description */}
-                <section className="bg-creme py-16 px-6">
+                <section className="bg-white py-16 px-6">
                     <div className="max-w-2xl mx-auto">
-                        <h2 className="font-serif text-2xl text-noir mb-6">Le concept Backyard Ultra</h2>
+                        <h2 className="font-chau text-2xl text-noir mb-6">Le concept Backyard Ultra</h2>
                         <p className="text-sm text-gris leading-relaxed mb-4">
                             Inventé par Lazarus Lake, le format Backyard Ultra est simple : une boucle de 6,706 km
                             (soit 4,167 miles — exactement 1/100e de marathon) à compléter toutes les heures.

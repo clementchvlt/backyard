@@ -14,11 +14,11 @@ export default function Inscription() {
             <Head title="Inscription" />
             <MainLayout>
                 {/* Page hero */}
-                <section className="bg-creme py-20 px-6 text-center border-b border-gray-100">
+                <section className="bg-creme py-10 px-6 text-center border-b border-gray-100">
                     <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">
                         Rejoindre la course
                     </p>
-                    <h1 className="font-serif text-4xl md:text-5xl text-noir">
+                    <h1 className="font-chau text-4xl md:text-5xl text-noir">
                         Inscription
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
@@ -30,7 +30,7 @@ export default function Inscription() {
                 {/* Event info */}
                 <section className="bg-white py-16 px-6">
                     <div className="max-w-2xl mx-auto">
-                        <h2 className="font-serif text-2xl text-noir mb-8">Informations pratiques</h2>
+                        <h2 className="font-chau text-2xl text-noir mb-8">Informations pratiques</h2>
                         <dl className="space-y-0 divide-y divide-gray-100">
                             {infos.map((info) => (
                                 <div key={info.label} className="flex justify-between py-4">

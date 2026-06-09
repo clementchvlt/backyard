@@ -4,7 +4,7 @@ import { useState } from 'react';
 const navLinks = [
     { label: 'ACCUEIL', href: '/' },
     { label: 'PARCOURS', href: '/parcours' },
-    { label: 'INSCRIPTION', href: '/inscription' },
+    { label: 'INFORMATIONS', href: '/informations' },
     { label: 'RÉSULTATS', href: '/resultats' },
     { label: 'CONTACT', href: '/contact' },
 ];
@@ -90,7 +90,7 @@ export default function MainLayout({ children }) {
             <footer className="bg-noir text-creme py-10 mt-auto">
                 <div className="max-w-5xl mx-auto px-6 text-center">
                     <p className="text-[11px] tracking-[0.2em] text-gris uppercase">
-                        La Backyard des Mools · Richelieu · Édition 2025
+                        La Backyard des Mools · Richelieu · Édition 2026
                     </p>
                 </div>
             </footer>

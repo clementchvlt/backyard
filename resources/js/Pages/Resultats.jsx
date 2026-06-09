@@ -7,11 +7,11 @@ export default function Resultats() {
             <Head title="Résultats" />
             <MainLayout>
                 {/* Page hero */}
-                <section className="bg-creme py-20 px-6 text-center border-b border-gray-100">
+                <section className="bg-creme py-10 px-6 text-center border-b border-gray-100">
                     <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">
                         Palmarès
                     </p>
-                    <h1 className="font-serif text-4xl md:text-5xl text-noir">
+                    <h1 className="font-chau text-4xl md:text-5xl text-noir">
                         Résultats
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
@@ -20,9 +20,9 @@ export default function Resultats() {
                 </section>
 
                 {/* Empty state */}
-                <section className="bg-white py-24 px-6">
+                <section className="bg-white py-12 px-6">
                     <div className="max-w-xl mx-auto text-center">
-                        <span className="font-serif text-7xl text-or-principal/30">∞</span>
+                        <span className="font-chau text-7xl text-or-principal/30">∞</span>
                         <p className="text-[11px] tracking-[0.25em] uppercase text-gris mt-6">
                             La course n'a pas encore eu lieu
                         </p>
