@@ -1,6 +1,7 @@
 import { Head } from '@inertiajs/react';
 import AdminLayout from '@/Layouts/AdminLayout';
 import ParticipantTable from '@/Components/ParticipantTable';
+import CourseSection from '@/Components/CourseSection';
 import { useState, useEffect } from 'react';
 import { router } from '@inertiajs/react';
 
@@ -135,9 +136,7 @@ export default function AdminPortal({ section }) {
 
                         {section === 'participants' && <ParticipantTable />}
 
-                        {section === 'course' && (
-                            <p className="text-gris text-sm">Gestion de la course — à venir.</p>
-                        )}
+                        {section === 'course' && <CourseSection />}
 
                         {section === 'reglages' && (
                             <p className="text-gris text-sm">Réglages — à venir.</p>
