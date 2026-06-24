@@ -6,7 +6,7 @@ export default defineConfig({
     server: {
         host: process.env.VITE_HOST ?? '0.0.0.0',
         port: Number(process.env.VITE_PORT ?? 5174),
-        strictPort: true,
+        strictPort: false,
         hmr: {
             host: process.env.VITE_HMR_HOST ?? 'localhost',
             port: Number(process.env.VITE_HMR_PORT ?? process.env.VITE_PORT ?? 5174),

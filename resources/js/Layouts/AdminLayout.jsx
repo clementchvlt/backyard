@@ -1,23 +1,15 @@
-import { Link, usePage } from '@inertiajs/react';
+import { Link } from '@inertiajs/react';
 import { useState } from 'react';
 
-const navLinks = [
-    { label: 'ACCUEIL', href: '/' },
-    { label: 'PARCOURS', href: '/parcours' },
-    { label: 'INFORMATIONS', href: '/informations' },
-    { label: 'RÉSULTATS', href: '/resultats' },
-    { label: 'CONTACT', href: '/contact' },
-    { label: 'CONNEXION', href: '/connexion' },
+const navSections = [
+    { key: 'dashboard',     label: 'DASHBOARD',    href: '/admin/dashboard' },
+    { key: 'participants',  label: 'PARTICIPANTS',  href: '/admin/participants' },
+    { key: 'course',        label: 'COURSE',        href: '/admin/course' },
+    { key: 'reglages',      label: 'RÉGLAGES',      href: '/admin/reglages' },
 ];
 
-export default function MainLayout({ children }) {
-    const { url } = usePage();
+export default function AdminLayout({ children, activeSection, onLogout, user }) {
     const [menuOpen, setMenuOpen] = useState(false);
-
-    const isActive = (href) => {
-        if (href === '/') return url === '/' || url === '';
-        return url.startsWith(href);
-    };
 
     return (
         <div className="min-h-screen bg-creme font-sans">
@@ -25,25 +17,33 @@ export default function MainLayout({ children }) {
                 <div className="max-w-5xl mx-auto px-6 flex items-center justify-between md:justify-center h-16">
                     {/* Desktop nav */}
                     <ul className="hidden md:flex items-center space-x-10">
-                        {navLinks.map((link) => (
-                            <li key={link.href}>
+                        {navSections.map((section) => (
+                            <li key={section.key}>
                                 <Link
-                                    href={link.href}
+                                    href={section.href}
                                     className={`text-[11px] tracking-[0.2em] font-medium transition-colors pb-1 inline-block ${
-                                        isActive(link.href)
+                                        activeSection === section.key
                                             ? 'text-or-principal border-b-2 border-or-principal'
                                             : 'text-noir hover:text-or-principal'
                                     }`}
                                 >
-                                    {link.label}
+                                    {section.label}
                                 </Link>
                             </li>
                         ))}
+                        <li>
+                            <button
+                                onClick={onLogout}
+                                className="text-[11px] tracking-[0.2em] font-medium transition-colors pb-1 inline-block text-noir hover:text-or-principal"
+                            >
+                                DÉCONNEXION
+                            </button>
+                        </li>
                     </ul>
 
                     {/* Mobile brand */}
                     <span className="md:hidden text-[11px] tracking-[0.2em] font-medium text-noir uppercase">
-                        La Backyard des Mools
+                        {user ? user.name : 'Admin'}
                     </span>
 
                     {/* Mobile hamburger */}
@@ -66,21 +66,29 @@ export default function MainLayout({ children }) {
                 {menuOpen && (
                     <div className="md:hidden bg-creme border-t border-gray-200 px-6 pb-4">
                         <ul className="flex flex-col space-y-4 pt-4">
-                            {navLinks.map((link) => (
-                                <li key={link.href}>
+                            {navSections.map((section) => (
+                                <li key={section.key}>
                                     <Link
-                                        href={link.href}
+                                        href={section.href}
                                         onClick={() => setMenuOpen(false)}
                                         className={`text-[11px] tracking-[0.2em] font-medium transition-colors ${
-                                            isActive(link.href)
+                                            activeSection === section.key
                                                 ? 'text-or-principal'
                                                 : 'text-noir hover:text-or-principal'
                                         }`}
                                     >
-                                        {link.label}
+                                        {section.label}
                                     </Link>
                                 </li>
                             ))}
+                            <li>
+                                <button
+                                    onClick={onLogout}
+                                    className="text-[11px] tracking-[0.2em] font-medium text-noir hover:text-or-principal transition-colors"
+                                >
+                                    DÉCONNEXION
+                                </button>
+                            </li>
                         </ul>
                     </div>
                 )}

@@ -49,6 +49,17 @@ services:
                 - '-p${DB_PASSWORD}'
             retries: 3
             timeout: 5s
+    phpmyadmin:
+        image: 'phpmyadmin/phpmyadmin'
+        ports:
+            - '8080:80'
+        environment:
+            PMA_HOST: mysql
+            PMA_PORT: 3306
+        networks:
+            - sail
+        depends_on:
+            - mysql
     redis:
         image: 'redis:alpine'
         ports:
@@ -64,6 +75,24 @@ services:
                 - ping
             retries: 3
             timeout: 5s
+    scheduler:
+        build:
+            context: './vendor/laravel/sail/runtimes/8.5'
+            dockerfile: Dockerfile
+            args:
+                WWWGROUP: '${WWWGROUP}'
+        image: 'sail-8.5/app'
+        command: 'php artisan schedule:work'
+        environment:
+            WWWUSER: '${WWWUSER}'
+            LARAVEL_SAIL: 1
+        volumes:
+            - '.:/var/www/html'
+        networks:
+            - sail
+        depends_on:
+            - mysql
+            - redis
 networks:
     sail:
         driver: bridge
