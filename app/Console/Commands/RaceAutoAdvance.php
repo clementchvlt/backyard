@@ -16,7 +16,6 @@ class RaceAutoAdvance extends Command
     public function handle(): void
     {
         $this->autoStart();
-        $this->autoAdvance();
     }
 
     /**
@@ -63,27 +62,5 @@ class RaceAutoAdvance extends Command
         $this->info("Course démarrée automatiquement — Boucle 1 lancée à {$startedAt->format('H:i')}.");
     }
 
-    /**
-     * Avance à la boucle suivante si la durée de la boucle courante est écoulée.
-     */
-    private function autoAdvance(): void
-    {
-        $session = RaceSession::where('status', 'active')->latest()->first();
-
-        if (! $session) {
-            return;
-        }
-
-        $currentLoop = $session->loops()->latest('loop_number')->first();
-        $loopEnd     = Carbon::parse($currentLoop->started_at)->addMinutes($session->loop_duration_minutes);
-
-        if (now()->lt($loopEnd)) {
-            return; // Boucle encore en cours
-        }
-
-        $result = app(\App\Http\Controllers\Api\RaceController::class)
-            ->advanceLoop($session, $currentLoop, $loopEnd);
-
-        $this->info($result['message']);
-    }
 }
+

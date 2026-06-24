@@ -30,8 +30,17 @@ Route::middleware('auth:sanctum')->group(function () {
             Route::post('/reopen', [RaceController::class, 'reopen']);
             Route::post('/reset', [RaceController::class, 'reset']);
             Route::post('/participants/{participant}/finish', [RaceController::class, 'finish']);
+            Route::post('/group-finish', [RaceController::class, 'groupFinish']);
             Route::post('/participants/{participant}/dnf', [RaceController::class, 'dnf']);
             Route::post('/participants/{participant}/restore', [RaceController::class, 'restore']);
+
+            // Super Admin — modification manuelle
+            Route::prefix('super')->group(function () {
+                Route::get('/data', [RaceController::class, 'superData']);
+                Route::patch('/results/{result}', [RaceController::class, 'superPatchResult']);
+                Route::patch('/loops/{loop}', [RaceController::class, 'superPatchLoop']);
+                Route::patch('/session', [RaceController::class, 'superPatchSession']);
+            });
         });
     });
 });

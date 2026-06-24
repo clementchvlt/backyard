@@ -46,16 +46,6 @@ class RaceController extends Controller
 
         $currentLoop = $session->loops()->latest('loop_number')->first();
 
-        // Auto-avance inline si la durée de la boucle est dépassée
-        if ($session->status === 'active' && $currentLoop) {
-            $loopEnd = Carbon::parse($currentLoop->started_at)->addMinutes($session->loop_duration_minutes);
-            if (now()->gte($loopEnd)) {
-                $this->advanceLoop($session, $currentLoop, $loopEnd);
-                $session->refresh();
-                $currentLoop = $session->loops()->latest('loop_number')->first();
-            }
-        }
-
         renderActive:
 
         // Load all results for this session in one query
@@ -64,11 +54,19 @@ class RaceController extends Controller
             ->get()
             ->groupBy('participant_id');
 
-        $participants = Participant::orderBy('bib_number')->get()->map(function ($p) use ($allResults, $currentLoop) {
+        $participants = Participant::orderBy('bib_number')->get()->map(function ($p) use ($allResults, $currentLoop, $session) {
             $results     = $allResults->get($p->id, collect());
             $isDnf       = $results->where('status', 'dnf')->isNotEmpty();
             $dnfResult   = $isDnf ? $results->where('status', 'dnf')->first() : null;
             $curResult   = $currentLoop ? $results->firstWhere('race_loop_id', $currentLoop->id) : null;
+
+            // Temps écoulé (depuis le départ théorique de la boucle) — cohérent avec le timer live
+            $elapsedSeconds = null;
+            if ($curResult?->status === 'finished' && $curResult->finished_at && $currentLoop && $session->started_at) {
+                $loopTheoStart  = Carbon::parse($session->started_at)
+                    ->addMinutes(($currentLoop->loop_number - 1) * $session->loop_duration_minutes);
+                $elapsedSeconds = max(0, $loopTheoStart->diffInSeconds(Carbon::parse($curResult->finished_at)));
+            }
 
             return [
                 'id'                  => $p->id,
@@ -80,6 +78,7 @@ class RaceController extends Controller
                 'loops_completed'     => $results->where('status', 'finished')->count(),
                 'current_loop_status' => $curResult?->status,
                 'finished_at'         => $curResult?->finished_at?->toIso8601String(),
+                'elapsed_seconds'     => $elapsedSeconds,
                 'eliminated_at_loop'  => $dnfResult?->raceLoop?->loop_number,
             ];
         });
@@ -140,7 +139,7 @@ class RaceController extends Controller
         ]);
     }
 
-    public function start(): JsonResponse
+    public function start(Request $request): JsonResponse
     {
         if (RaceSession::where('status', 'active')->exists()) {
             return response()->json(['message' => 'Une course est déjà en cours.'], 422);
@@ -150,13 +149,23 @@ class RaceController extends Controller
             return response()->json(['message' => 'Aucun participant inscrit.'], 422);
         }
 
+        $loopDuration = (int) $request->input('loop_duration_minutes', 60);
+        if ($loopDuration < 1 || $loopDuration > 1440) {
+            $loopDuration = 60;
+        }
+
         // Promote a scheduled session if one exists, otherwise create fresh
         $session = RaceSession::where('status', 'scheduled')->latest()->first()
-            ?? RaceSession::create(['status' => 'pending']);
+            ?? RaceSession::create(['status' => 'pending', 'loop_duration_minutes' => $loopDuration]);
+
+        // Override duration on existing sessions too (manual start can change it)
+        if ($session->wasRecentlyCreated === false) {
+            $session->update(['loop_duration_minutes' => $loopDuration]);
+        }
 
         $this->startSession($session, now());
 
-        return response()->json(['message' => 'Course démarrée — Boucle 1 en cours !']);
+        return response()->json(['message' => "Course démarrée — Boucle 1 en cours ! ({$loopDuration} min/boucle)"]);
     }
 
     /**
@@ -246,6 +255,31 @@ class RaceController extends Controller
         ];
     }
 
+    public function groupFinish(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'participant_ids'   => 'required|array|min:1',
+            'participant_ids.*' => 'integer|exists:participants,id',
+            'finished_at'       => 'nullable|date',
+        ]);
+
+        $session     = RaceSession::where('status', 'active')->latest()->firstOrFail();
+        $currentLoop = $session->loops()->latest('loop_number')->firstOrFail();
+
+        $finishedAt = isset($data['finished_at']) && $data['finished_at']
+            ? Carbon::parse($data['finished_at'])
+            : now();
+
+        $updated = LoopResult::where('race_loop_id', $currentLoop->id)
+            ->whereIn('participant_id', $data['participant_ids'])
+            ->where('status', 'running')
+            ->update(['status' => 'finished', 'finished_at' => $finishedAt, 'updated_at' => now()]);
+
+        return response()->json([
+            'message' => "{$updated} participant(s) enregistré(s) à {$finishedAt->format('H:i:s')}.",
+        ]);
+    }
+
     public function finish(Request $request, Participant $participant): JsonResponse
     {
         $request->validate([
@@ -300,7 +334,10 @@ class RaceController extends Controller
             ->with('participant')
             ->get();
 
-        $loopStarted = Carbon::parse($loop->started_at);
+        // Heure théorique de début de boucle = départ course + (n° - 1) × durée
+        // Cohérent avec le timer affiché pendant la course
+        $loopTheoStart = Carbon::parse($session->started_at)
+            ->addMinutes(($loop->loop_number - 1) * $session->loop_duration_minutes);
 
         $finishers = $results->where('status', 'finished')
             ->sortBy('finished_at')
@@ -312,7 +349,7 @@ class RaceController extends Controller
                 'last_name'       => $r->participant->last_name,
                 'finished_at'     => $r->finished_at?->toIso8601String(),
                 'elapsed_seconds' => $r->finished_at
-                    ? $loopStarted->diffInSeconds(Carbon::parse($r->finished_at))
+                    ? $loopTheoStart->diffInSeconds(Carbon::parse($r->finished_at))
                     : null,
             ]);
 
@@ -340,6 +377,102 @@ class RaceController extends Controller
             'dnfs'                   => $dnfs,
             'running'                => $running,
         ]);
+    }
+
+    // ── Super Admin ─────────────────────────────────────────────────────────
+
+    /**
+     * Retourne toutes les données brutes de la session en cours (boucles + résultats).
+     */
+    public function superData(): JsonResponse
+    {
+        $session = RaceSession::latest()->first();
+
+        if (! $session) {
+            return response()->json(['message' => 'Aucune session.'], 404);
+        }
+
+        $loops = $session->loops()
+            ->orderBy('loop_number')
+            ->with(['results.participant'])
+            ->get();
+
+        return response()->json([
+            'session' => $session,
+            'loops'   => $loops->map(fn ($loop) => [
+                'id'          => $loop->id,
+                'loop_number' => $loop->loop_number,
+                'started_at'  => $loop->started_at?->toIso8601String(),
+                'results'     => $loop->results
+                    ->sortBy(fn ($r) => $r->participant->bib_number)
+                    ->values()
+                    ->map(fn ($r) => [
+                        'id'             => $r->id,
+                        'participant_id' => $r->participant_id,
+                        'bib_number'     => $r->participant->bib_number,
+                        'first_name'     => $r->participant->first_name,
+                        'last_name'      => $r->participant->last_name,
+                        'status'         => $r->status,
+                        'finished_at'    => $r->finished_at?->toIso8601String(),
+                    ]),
+            ]),
+        ]);
+    }
+
+    /**
+     * Patch un résultat individuel (status, finished_at).
+     */
+    public function superPatchResult(Request $request, LoopResult $result): JsonResponse
+    {
+        $data = $request->validate([
+            'status'      => 'sometimes|in:running,finished,dnf',
+            'finished_at' => 'sometimes|nullable|date',
+        ]);
+
+        if (isset($data['finished_at']) && $data['finished_at'] !== null) {
+            $data['finished_at'] = Carbon::parse($data['finished_at']);
+        }
+
+        $result->update($data);
+
+        return response()->json(['message' => 'Résultat mis à jour.']);
+    }
+
+    /**
+     * Patch le started_at d'une boucle.
+     */
+    public function superPatchLoop(Request $request, RaceLoop $loop): JsonResponse
+    {
+        $data = $request->validate([
+            'started_at' => 'required|date',
+        ]);
+
+        $loop->update(['started_at' => Carbon::parse($data['started_at'])]);
+
+        return response()->json(['message' => 'Boucle mise à jour.']);
+    }
+
+    /**
+     * Patch la session courante (durée, statut, max_loops, started_at).
+     */
+    public function superPatchSession(Request $request): JsonResponse
+    {
+        $session = RaceSession::latest()->firstOrFail();
+
+        $data = $request->validate([
+            'loop_duration_minutes' => 'sometimes|integer|min:1|max:1440',
+            'status'                => 'sometimes|in:pending,scheduled,active,finished',
+            'started_at'            => 'sometimes|nullable|date',
+            'max_loops'             => 'sometimes|nullable|integer|min:1',
+        ]);
+
+        if (isset($data['started_at']) && $data['started_at'] !== null) {
+            $data['started_at'] = Carbon::parse($data['started_at']);
+        }
+
+        $session->update($data);
+
+        return response()->json(['message' => 'Session mise à jour.']);
     }
 
     public function cancelSchedule(): JsonResponse    {

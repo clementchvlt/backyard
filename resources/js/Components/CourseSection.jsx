@@ -17,7 +17,7 @@ function fmtTime(isoString) {
 
 function toDatetimeLocal(date = new Date()) {
     const p = (n) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}`;
+    return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -96,6 +96,7 @@ function RunningCard({ p, onFinish, onFinishWithTime, onDnf, loading }) {
                 <div className="flex gap-1.5 items-center pt-1 border-t border-gray-100">
                     <input
                         type="datetime-local"
+                        step="1"
                         value={manualTime}
                         onChange={(e) => setManualTime(e.target.value)}
                         className="flex-1 border border-gray-200 bg-creme px-2 py-1.5 text-xs text-noir focus:outline-none focus:border-or-principal min-w-0"
@@ -113,10 +114,8 @@ function RunningCard({ p, onFinish, onFinishWithTime, onDnf, loading }) {
     );
 }
 
-function FinisherBadge({ p, loopStartedAt }) {
-    const loopTime = p.finished_at && loopStartedAt
-        ? fmt(Math.floor((new Date(p.finished_at) - new Date(loopStartedAt)) / 1000))
-        : null;
+function FinisherBadge({ p }) {
+    const loopTime = p.elapsed_seconds != null ? fmt(p.elapsed_seconds) : null;
     return (
         <div className="border border-or-principal bg-white px-3 py-2 flex items-center justify-between gap-2">
             <div>
@@ -330,6 +329,7 @@ function EliminatedList({ participants, currentLoopNumber, onRestore, loading })
 
 function NotStarted({ onStart, onSchedule, participantCount, loading }) {
     const [showForm, setShowForm] = useState(false);
+    const [quickDuration, setQuickDuration] = useState(60);
     const [form, setForm] = useState({
         date: '2026-07-25',
         start_time: '08:00',
@@ -356,13 +356,26 @@ function NotStarted({ onStart, onSchedule, participantCount, loading }) {
             </div>
 
             <div className="flex flex-col items-center gap-3 mb-6">
-                <button
-                    onClick={onStart}
-                    disabled={loading || participantCount === 0}
-                    className="bg-or-principal text-creme text-[11px] tracking-[0.2em] uppercase px-10 py-4 hover:bg-or-sombre transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                    {loading ? 'Démarrage…' : '▶ Démarrer maintenant'}
-                </button>
+                <div className="flex items-center gap-2">
+                    <button
+                        onClick={() => onStart(quickDuration)}
+                        disabled={loading || participantCount === 0}
+                        className="bg-or-principal text-creme text-[11px] tracking-[0.2em] uppercase px-10 py-4 hover:bg-or-sombre transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        {loading ? 'Démarrage…' : '▶ Démarrer maintenant'}
+                    </button>
+                    <div className="flex flex-col items-center gap-0.5">
+                        <input
+                            type="number"
+                            min="1"
+                            max="1440"
+                            value={quickDuration}
+                            onChange={(e) => setQuickDuration(Math.max(1, parseInt(e.target.value) || 60))}
+                            className="w-16 border border-gray-300 bg-creme px-2 py-1 text-center text-sm text-noir focus:outline-none focus:border-or-principal"
+                        />
+                        <span className="text-[9px] text-gris uppercase tracking-wide">min/boucle</span>
+                    </div>
+                </div>
                 <button
                     onClick={() => setShowForm((s) => !s)}
                     className="text-gris text-[10px] tracking-wider uppercase hover:text-or-principal transition-colors"
@@ -518,6 +531,418 @@ function RaceFinished({ participants, onReopen, loading }) {
     );
 }
 
+// ─── Group Finish Panel ───────────────────────────────────────────────────────
+
+function GroupFinishPanel({ runningParticipants, token, onDone, onClose }) {
+    const [selected, setSelected]   = useState([]);
+    const [time, setTime]           = useState('');
+    const [saving, setSaving]       = useState(false);
+    const [err, setErr]             = useState(null);
+
+    const allSelected = selected.length === runningParticipants.length && runningParticipants.length > 0;
+
+    const toggleAll = () => setSelected(allSelected ? [] : runningParticipants.map((p) => p.id));
+    const toggle    = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
+
+    const confirm = async () => {
+        if (selected.length === 0) return;
+        setSaving(true);
+        setErr(null);
+        try {
+            const body = { participant_ids: selected };
+            if (time) body.finished_at = time;
+            const r = await fetch('/api/admin/race/group-finish', {
+                method: 'POST',
+                headers: {
+                    Accept: 'application/json',
+                    Authorization: `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(body),
+            });
+            const data = await r.json();
+            if (!r.ok) { setErr(data.message); return; }
+            onDone?.();
+        } catch {
+            setErr('Une erreur est survenue.');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const sorted = [...runningParticipants].sort((a, b) => a.bib_number - b.bib_number);
+
+    return (
+        <div className="border border-or-clair bg-creme p-4 space-y-4">
+            {/* Header */}
+            <div className="flex items-center justify-between">
+                <span className="text-[10px] tracking-[0.2em] uppercase text-or-sombre font-medium">
+                    Arrivée groupée
+                </span>
+                <div className="flex items-center gap-4">
+                    <label className="flex items-center gap-1.5 text-xs text-gris cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={allSelected}
+                            onChange={toggleAll}
+                            className="accent-or-principal"
+                        />
+                        Tous ({runningParticipants.length})
+                    </label>
+                    <button onClick={onClose} className="text-gris hover:text-noir text-xs">✕</button>
+                </div>
+            </div>
+
+            {/* Participant checkboxes */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                {sorted.map((p) => (
+                    <label
+                        key={p.id}
+                        className={`flex items-center gap-2 text-xs px-3 py-2 border cursor-pointer transition-colors select-none ${
+                            selected.includes(p.id)
+                                ? 'border-or-principal bg-white text-noir'
+                                : 'border-gray-200 bg-white text-gris'
+                        }`}
+                    >
+                        <input
+                            type="checkbox"
+                            checked={selected.includes(p.id)}
+                            onChange={() => toggle(p.id)}
+                            className="accent-or-principal shrink-0"
+                        />
+                        <span className="font-mono text-[10px] shrink-0">#{p.bib_number}</span>
+                        <span className="truncate">{p.last_name}</span>
+                    </label>
+                ))}
+            </div>
+
+            {/* Time + confirm */}
+            <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-or-clair">
+                <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-gris uppercase tracking-wide shrink-0">Heure d'arrivée</span>
+                    <input
+                        type="datetime-local"
+                        step="1"
+                        value={time}
+                        onChange={(e) => setTime(e.target.value)}
+                        className="border border-gray-300 px-2 py-1 text-xs bg-white"
+                    />
+                    <button
+                        onClick={() => setTime(toDatetimeLocal())}
+                        className="border border-gray-300 text-gris text-[10px] px-2 py-1 hover:border-or-principal hover:text-or-sombre transition-colors"
+                    >
+                        Maintenant
+                    </button>
+                    {time && (
+                        <button onClick={() => setTime('')} className="text-gris text-[10px] hover:text-noir">
+                            ✕
+                        </button>
+                    )}
+                </div>
+                {err && <span className="text-red-600 text-xs">{err}</span>}
+                <button
+                    onClick={confirm}
+                    disabled={selected.length === 0 || saving}
+                    className="bg-or-principal text-creme text-[10px] tracking-[0.2em] uppercase px-6 py-2 hover:bg-or-sombre transition-colors disabled:opacity-50 ml-auto"
+                >
+                    {saving ? 'Enregistrement…' : `✓ Confirmer l'arrivée (${selected.length})`}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+// ─── Super Admin Panel ────────────────────────────────────────────────────────
+
+function SuperAdminPanel({ token, onRefresh }) {
+    const [open, setOpen]           = useState(false);
+    const [data, setData]           = useState(null);
+    const [loading, setLoading]     = useState(false);
+    const [saving, setSaving]       = useState({});
+    const [msg, setMsg]             = useState(null);
+    const [sessionForm, setSessionForm] = useState({});
+    const [loopForms, setLoopForms]     = useState({});
+    const [resultForms, setResultForms] = useState({});
+
+    const apiFetch = (url, method = 'GET', body = null) =>
+        fetch(url, {
+            method,
+            headers: {
+                Accept: 'application/json',
+                Authorization: `Bearer ${token}`,
+                ...(body ? { 'Content-Type': 'application/json' } : {}),
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+        });
+
+    const fetchData = async () => {
+        setLoading(true);
+        try {
+            const r = await apiFetch('/api/admin/race/super/data');
+            if (r.ok) setData(await r.json());
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => { if (open) fetchData(); }, [open]);
+
+    useEffect(() => {
+        if (data?.session) {
+            setSessionForm({
+                status:                 data.session.status,
+                loop_duration_minutes:  data.session.loop_duration_minutes,
+                max_loops:              data.session.max_loops ?? '',
+                started_at:             data.session.started_at
+                    ? new Date(data.session.started_at).toISOString().slice(0, 19) : '',
+            });
+        }
+    }, [data?.session]);
+
+    useEffect(() => {
+        if (data?.loops) {
+            const lf = {}, rf = {};
+            data.loops.forEach(loop => {
+                lf[loop.id] = {
+                    started_at: loop.started_at
+                        ? new Date(loop.started_at).toISOString().slice(0, 19) : '',
+                };
+                loop.results.forEach(r => {
+                    rf[r.id] = {
+                        status:      r.status,
+                        finished_at: r.finished_at
+                            ? new Date(r.finished_at).toISOString().slice(0, 19) : '',
+                    };
+                });
+            });
+            setLoopForms(lf);
+            setResultForms(rf);
+        }
+    }, [data?.loops]);
+
+    const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 3000); };
+
+    const save = (key, fn) => async () => {
+        setSaving(s => ({ ...s, [key]: true }));
+        try {
+            const r = await fn();
+            if (r.ok) { flash('✓ Sauvegardé.'); fetchData(); onRefresh?.(); }
+            else { const e = await r.json(); flash('Erreur : ' + (e.message || r.status)); }
+        } finally {
+            setSaving(s => ({ ...s, [key]: false }));
+        }
+    };
+
+    return (
+        <div className="border border-amber-300 bg-amber-50 mt-6">
+            <button
+                onClick={() => setOpen(o => !o)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-amber-100 transition-colors"
+            >
+                <span className="flex items-center gap-2 text-amber-800 font-chau tracking-widest text-xs uppercase">
+                    ⚙ Mode Super Admin
+                </span>
+                <span className="text-amber-600 text-xs">{open ? '▲ Fermer' : '▼ Ouvrir'}</span>
+            </button>
+
+            {open && (
+                <div className="border-t border-amber-200 p-4 space-y-8">
+                    <p className="text-[10px] text-amber-700 italic">
+                        Modification manuelle directe de toutes les données — à utiliser uniquement en cas de problème technique.
+                    </p>
+
+                    {msg && (
+                        <div className="bg-amber-100 border border-amber-300 text-amber-800 text-xs px-3 py-2">
+                            {msg}
+                        </div>
+                    )}
+
+                    {loading && <p className="text-xs text-gray-400 italic">Chargement…</p>}
+
+                    {data && (
+                        <>
+                            {/* ── Session ── */}
+                            <section>
+                                <h3 className="font-chau tracking-widest text-[11px] uppercase text-amber-700 border-b border-amber-200 pb-1 mb-3">
+                                    Session
+                                </h3>
+                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Statut</span>
+                                        <select
+                                            value={sessionForm.status || ''}
+                                            onChange={e => setSessionForm(f => ({ ...f, status: e.target.value }))}
+                                            className="border border-gray-300 px-2 py-1 text-xs bg-white"
+                                        >
+                                            <option value="pending">pending</option>
+                                            <option value="scheduled">scheduled</option>
+                                            <option value="active">active</option>
+                                            <option value="finished">finished</option>
+                                        </select>
+                                    </label>
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Durée boucle (min)</span>
+                                        <input
+                                            type="number" min="1" max="1440"
+                                            value={sessionForm.loop_duration_minutes || ''}
+                                            onChange={e => setSessionForm(f => ({ ...f, loop_duration_minutes: e.target.value }))}
+                                            className="border border-gray-300 px-2 py-1 text-xs"
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Départ course</span>
+                                        <input
+                                            type="datetime-local"
+                        step="1"
+                                            value={sessionForm.started_at || ''}
+                                            onChange={e => setSessionForm(f => ({ ...f, started_at: e.target.value }))}
+                                            className="border border-gray-300 px-2 py-1 text-xs"
+                                        />
+                                    </label>
+                                    <label className="flex flex-col gap-1">
+                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Max boucles</span>
+                                        <input
+                                            type="number" min="1"
+                                            value={sessionForm.max_loops || ''}
+                                            onChange={e => setSessionForm(f => ({ ...f, max_loops: e.target.value }))}
+                                            className="border border-gray-300 px-2 py-1 text-xs"
+                                        />
+                                    </label>
+                                </div>
+                                <button
+                                    disabled={saving['session']}
+                                    onClick={save('session', () => apiFetch('/api/admin/race/super/session', 'PATCH', {
+                                        status:                 sessionForm.status,
+                                        loop_duration_minutes:  parseInt(sessionForm.loop_duration_minutes),
+                                        max_loops:              sessionForm.max_loops ? parseInt(sessionForm.max_loops) : null,
+                                        started_at:             sessionForm.started_at || null,
+                                    }))}
+                                    className="mt-3 bg-amber-600 text-white text-[10px] tracking-widest uppercase px-4 py-1.5 hover:bg-amber-700 disabled:opacity-50"
+                                >
+                                    {saving['session'] ? 'Sauvegarde…' : 'Sauvegarder la session'}
+                                </button>
+                            </section>
+
+                            {/* ── Boucles & résultats ── */}
+                            <section>
+                                <h3 className="font-chau tracking-widest text-[11px] uppercase text-amber-700 border-b border-amber-200 pb-1 mb-3">
+                                    Boucles & résultats
+                                </h3>
+                                <div className="space-y-4">
+                                    {data.loops.map(loop => (
+                                        <div key={loop.id} className="border border-amber-200 bg-white overflow-hidden">
+                                            {/* Loop header */}
+                                            <div className="flex items-center gap-3 px-3 py-2 bg-amber-50 border-b border-amber-200">
+                                                <span className="font-chau tracking-widest text-xs text-amber-800 shrink-0">
+                                                    Boucle {loop.loop_number}
+                                                </span>
+                                                <input
+                                                    type="datetime-local"
+                        step="1"
+                                                    value={loopForms[loop.id]?.started_at || ''}
+                                                    onChange={e => setLoopForms(f => ({
+                                                        ...f,
+                                                        [loop.id]: { started_at: e.target.value },
+                                                    }))}
+                                                    className="border border-gray-300 px-2 py-0.5 text-xs flex-1 min-w-0"
+                                                />
+                                                <button
+                                                    disabled={saving[`loop-${loop.id}`]}
+                                                    onClick={save(`loop-${loop.id}`, () => apiFetch(
+                                                        `/api/admin/race/super/loops/${loop.id}`, 'PATCH',
+                                                        { started_at: loopForms[loop.id]?.started_at }
+                                                    ))}
+                                                    className="bg-amber-600 text-white text-[9px] tracking-widest uppercase px-3 py-1 hover:bg-amber-700 disabled:opacity-50 whitespace-nowrap"
+                                                >
+                                                    {saving[`loop-${loop.id}`] ? '…' : 'Sauver'}
+                                                </button>
+                                            </div>
+
+                                            {/* Results table */}
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-xs min-w-[520px]">
+                                                    <thead>
+                                                        <tr className="bg-gray-50 text-gray-400 uppercase tracking-wide text-[9px]">
+                                                            <th className="px-3 py-1.5 text-left w-12">Doss.</th>
+                                                            <th className="px-3 py-1.5 text-left">Participant</th>
+                                                            <th className="px-3 py-1.5 text-left w-28">Statut</th>
+                                                            <th className="px-3 py-1.5 text-left">Arrivée</th>
+                                                            <th className="px-3 py-1.5 w-10"></th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        {loop.results.map(result => (
+                                                            <tr key={result.id} className="border-t border-gray-100">
+                                                                <td className="px-3 py-1.5 font-mono text-gray-500 text-[10px]">
+                                                                    #{result.bib_number}
+                                                                </td>
+                                                                <td className="px-3 py-1.5 text-gray-700">
+                                                                    {result.first_name} {result.last_name}
+                                                                </td>
+                                                                <td className="px-3 py-1.5">
+                                                                    <select
+                                                                        value={resultForms[result.id]?.status || ''}
+                                                                        onChange={e => setResultForms(f => ({
+                                                                            ...f,
+                                                                            [result.id]: { ...f[result.id], status: e.target.value },
+                                                                        }))}
+                                                                        className={`border px-1.5 py-0.5 text-[10px] ${
+                                                                            resultForms[result.id]?.status === 'finished'
+                                                                                ? 'border-green-300 bg-green-50 text-green-700'
+                                                                                : resultForms[result.id]?.status === 'dnf'
+                                                                                    ? 'border-red-300 bg-red-50 text-red-700'
+                                                                                    : 'border-blue-300 bg-blue-50 text-blue-700'
+                                                                        }`}
+                                                                    >
+                                                                        <option value="running">running</option>
+                                                                        <option value="finished">finished</option>
+                                                                        <option value="dnf">dnf</option>
+                                                                    </select>
+                                                                </td>
+                                                                <td className="px-3 py-1.5">
+                                                                    <input
+                                                                        type="datetime-local"
+                        step="1"
+                                                                        value={resultForms[result.id]?.finished_at || ''}
+                                                                        onChange={e => setResultForms(f => ({
+                                                                            ...f,
+                                                                            [result.id]: { ...f[result.id], finished_at: e.target.value },
+                                                                        }))}
+                                                                        className="border border-gray-300 px-1.5 py-0.5 text-[10px] w-40"
+                                                                    />
+                                                                </td>
+                                                                <td className="px-3 py-1.5">
+                                                                    <button
+                                                                        disabled={saving[`result-${result.id}`]}
+                                                                        onClick={save(`result-${result.id}`, () => apiFetch(
+                                                                            `/api/admin/race/super/results/${result.id}`, 'PATCH',
+                                                                            {
+                                                                                status:      resultForms[result.id]?.status,
+                                                                                finished_at: resultForms[result.id]?.finished_at || null,
+                                                                            }
+                                                                        ))}
+                                                                        className="bg-amber-600 text-white text-[9px] tracking-widest uppercase px-2 py-1 hover:bg-amber-700 disabled:opacity-50"
+                                                                    >
+                                                                        {saving[`result-${result.id}`] ? '…' : 'OK'}
+                                                                    </button>
+                                                                </td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </section>
+                        </>
+                    )}
+                </div>
+            )}
+        </div>
+    );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function CourseSection() {
@@ -528,7 +953,8 @@ export default function CourseSection() {
     const [acting, setActing]           = useState(false);
     const [elapsed, setElapsed]         = useState(0);
     const [search, setSearch]           = useState('');
-    const [selectedLoop, setSelectedLoop] = useState(null);
+    const [selectedLoop, setSelectedLoop]       = useState(null);
+    const [showGroupFinish, setShowGroupFinish] = useState(false);
 
     const token = localStorage.getItem('admin_token');
     const h = { Accept: 'application/json', Authorization: `Bearer ${token}` };
@@ -557,15 +983,19 @@ export default function CourseSection() {
     }, [fetchRace, isImminent]);
 
     // Live timer — updates every second
+    // Le temps de référence théorique d'une boucle = départ course + (n° boucle - 1) * durée
     useEffect(() => {
-        if (!race?.current_loop?.started_at) return;
-        const tick = () => setElapsed(
-            Math.floor((Date.now() - new Date(race.current_loop.started_at)) / 1000)
-        );
+        if (!race?.session?.started_at || !race?.current_loop?.loop_number) return;
+        const tick = () => {
+            const raceStartMs = new Date(race.session.started_at).getTime();
+            const loopDurMs   = (race.session.loop_duration_minutes ?? 60) * 60 * 1000;
+            const loopTheoStart = raceStartMs + (race.current_loop.loop_number - 1) * loopDurMs;
+            setElapsed(Math.floor((Date.now() - loopTheoStart) / 1000));
+        };
         tick();
         const id = setInterval(tick, 1000);
         return () => clearInterval(id);
-    }, [race?.current_loop?.started_at]);
+    }, [race?.current_loop?.id, race?.session?.started_at, race?.session?.loop_duration_minutes]);
 
     const post = async (url, confirm_msg) => {
         if (confirm_msg && !window.confirm(confirm_msg)) return;
@@ -652,7 +1082,7 @@ export default function CourseSection() {
                     </div>
                 )}
                 <NotStarted
-                    onStart={() => post('/api/admin/race/start')}
+                    onStart={(duration) => postWithBody('/api/admin/race/start', { loop_duration_minutes: duration })}
                     onSchedule={(body) => postWithBody('/api/admin/race/schedule', body)}
                     participantCount={count}
                     loading={acting}
@@ -671,7 +1101,9 @@ export default function CourseSection() {
 
     const loopDuration = (session?.loop_duration_minutes ?? 60) * 60;
     const overtime     = elapsed > loopDuration;
-    const warning      = !overtime && elapsed > loopDuration - 300; // last 5 min
+    // Avertissement : dernières 5 min ou derniers 15% de la boucle (whichever is smaller)
+    const warnThreshold = Math.min(300, loopDuration * 0.15);
+    const warning      = !overtime && elapsed > loopDuration - warnThreshold;
 
     const timerColor = overtime ? 'red' : warning ? 'orange' : 'gold';
 
@@ -784,19 +1216,40 @@ export default function CourseSection() {
             </div>
 
             {/* Running participants */}
-            <div>
-                <div className="flex items-center justify-between mb-3 gap-4">
+            <div className="space-y-3">
+                <div className="flex items-center justify-between gap-4">
                     <h3 className="text-[11px] tracking-[0.2em] uppercase text-gris">
                         En course — {participants.filter((p) => p.is_active && p.current_loop_status === 'running').length} participant(s)
                     </h3>
-                    <input
-                        type="search"
-                        placeholder="N° ou nom…"
-                        value={search}
-                        onChange={(e) => setSearch(e.target.value)}
-                        className="border border-gray-200 bg-creme px-3 py-1.5 text-sm text-noir focus:outline-none focus:border-or-principal transition-colors w-40"
-                    />
+                    <div className="flex items-center gap-2">
+                        <button
+                            onClick={() => setShowGroupFinish((s) => !s)}
+                            className={`text-[10px] tracking-[0.15em] uppercase px-3 py-1.5 border transition-colors ${
+                                showGroupFinish
+                                    ? 'border-or-principal bg-or-principal text-creme'
+                                    : 'border-or-clair text-or-sombre hover:bg-or-clair'
+                            }`}
+                        >
+                            ≡ Arrivée groupée
+                        </button>
+                        <input
+                            type="search"
+                            placeholder="N° ou nom…"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            className="border border-gray-200 bg-creme px-3 py-1.5 text-sm text-noir focus:outline-none focus:border-or-principal transition-colors w-40"
+                        />
+                    </div>
                 </div>
+
+                {showGroupFinish && (
+                    <GroupFinishPanel
+                        runningParticipants={participants.filter((p) => p.is_active && p.current_loop_status === 'running')}
+                        token={token}
+                        onDone={() => { setShowGroupFinish(false); fetchRace(); }}
+                        onClose={() => setShowGroupFinish(false)}
+                    />
+                )}
 
                 {filteredRunning.length === 0 ? (
                     <p className="text-gris text-sm">
@@ -831,7 +1284,7 @@ export default function CourseSection() {
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                         {finished.map((p) => (
-                            <FinisherBadge key={p.id} p={p} loopStartedAt={current_loop?.started_at} />
+                            <FinisherBadge key={p.id} p={p} />
                         ))}
                     </div>
                 </div>
@@ -852,6 +1305,9 @@ export default function CourseSection() {
                 onRestore={(p) => post(`/api/admin/race/participants/${p.id}/restore`, `Remettre #${p.bib_number} ${p.last_name} en lice ?`)}
                 loading={acting}
             />
+
+            {/* Super Admin */}
+            <SuperAdminPanel token={token} onRefresh={fetchRace} />
         </div>
     );
 }
