@@ -3,7 +3,7 @@ import MainLayout from '@/Layouts/MainLayout';
 
 const infos = [
     { label: 'Date', value: 'Samedi 25 juillet 2026' },
-    { label: 'Départ', value: '8h00, puis chaque heure jusqu'à 19h' },
+    { label: 'Départ', value: '8h00, puis chaque heure jusqu\'à 19h' },
     { label: 'Lieu', value: 'Richelieu, Indre-et-Loire' },
     { label: 'Format', value: 'Backyard Ultra — boucles de 6,7 km' },
 ];
