@@ -1,18 +1,36 @@
 import { Link, usePage } from '@inertiajs/react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
-const navLinks = [
+const baseNavLinks = [
     { label: 'ACCUEIL', href: '/' },
     { label: 'PARCOURS', href: '/parcours' },
     { label: 'INFORMATIONS', href: '/informations' },
     { label: 'RÉSULTATS', href: '/resultats' },
-    { label: 'CONTACT', href: '/contact' },
-    { label: 'CONNEXION', href: '/connexion' },
 ];
+
+const adminSequence = ['a', 'd', 'm', 'i', 'n', 'ArrowUp', 'ArrowDown'];
 
 export default function MainLayout({ children }) {
     const { url } = usePage();
     const [menuOpen, setMenuOpen] = useState(false);
+    const [adminMode, setAdminMode] = useState(false);
+    const keyBufferRef = useRef([]);
+
+    useEffect(() => {
+        const onKeyDown = (event) => {
+            keyBufferRef.current = [...keyBufferRef.current, event.key].slice(-adminSequence.length);
+            if (!adminMode && keyBufferRef.current.join('|') === adminSequence.join('|')) {
+                setAdminMode(true);
+            }
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [adminMode]);
+
+    const navLinks = adminMode
+        ? [...baseNavLinks, { label: 'CONNEXION', href: '/connexion' }]
+        : baseNavLinks;
 
     const isActive = (href) => {
         if (href === '/') return url === '/' || url === '';

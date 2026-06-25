@@ -19,7 +19,7 @@ export default function Welcome() {
                     />
 
                     <p className="text-[10px] tracking-[0.35em] text-gris uppercase mb-4">
-                        Boucle après boucle &nbsp;·&nbsp; jusqu'au dernier
+                        Boucle après boucle &nbsp;·&nbsp; jusqu'à 12 boucles
                     </p>
 
                     
@@ -29,7 +29,7 @@ export default function Welcome() {
                 <section className="bg-white grid grid-cols-2 md:grid-cols-4 divide-x divide-gray-100 border-t border-gray-100">
                     {[
                         { value: '6,7', unit: 'KM / BOUCLE' },
-                        { value: '∞', unit: 'BOUCLES' },
+                        { value: '12', unit: 'BOUCLES MAX' },
                         { value: '1h', unit: 'PAR BOUCLE' },
                         { value: '?', unit: 'SURVIVANTS' },
                     ].map((stat) => (

@@ -39,7 +39,7 @@ export default function Parcours() {
                         Le Parcours
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
-                        Une boucle de 6,7 km à répéter toutes les heures, jusqu'au dernier survivant.
+                        Une boucle de 6,7 km à répéter toutes les heures. Premier départ samedi 25 juillet à 8h, dernier départ à 19h.
                     </p>
                 </section>
 
@@ -73,12 +73,17 @@ export default function Parcours() {
                             Chaque concurrent repart dès qu'il finit sa boucle, dans la limite du temps imparti.
                         </p>
                         <p className="text-sm text-gris leading-relaxed mb-4">
-                            La course se termine quand il ne reste qu'un seul coureur capable de boucler encore un tour.
-                            Ce dernier survivant est déclaré vainqueur — mais seulement si les autres ont abandonné.
+                            Samedi 25 juillet, le premier départ aura lieu à 8h. Un départ est donné chaque heure,
+                            et le dernier départ est prévu à 19h, pour un maximum de 12 boucles.
+                        </p>
+                        <p className="text-sm text-gris leading-relaxed mb-4">
+                            Chaque coureur dispose d'une heure pour boucler sa boucle. Celui qui ne termine pas dans le
+                            temps ou qui ne repart pas pour le tour suivant est éliminé.
                         </p>
                         <p className="text-sm text-gris leading-relaxed">
-                            À Richelieu, la boucle serpente à travers les chemins du bocage vallonné de l'Indre-et-Loire,
-                            pour une expérience à la fois éprouvante et magnifique.
+                            Le vainqueur sera le dernier coureur capable de repartir pour une nouvelle boucle, ou,
+                            si plusieurs coureurs prennent le départ de la 12e boucle, celui qui aura mis le moins de temps
+                            pour réaliser les 12 boucles.
                         </p>
                     </div>
                 </section>

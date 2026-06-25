@@ -2,10 +2,10 @@ import { Head, Link } from '@inertiajs/react';
 import MainLayout from '@/Layouts/MainLayout';
 
 const infos = [
-    { label: 'Date', value: 'Automne 2025' },
+    { label: 'Date', value: 'Samedi 25 juillet 2026' },
+    { label: 'Départ', value: '8h00, puis chaque heure jusqu'à 19h' },
     { label: 'Lieu', value: 'Richelieu, Indre-et-Loire' },
     { label: 'Format', value: 'Backyard Ultra — boucles de 6,7 km' },
-    { label: 'Places', value: 'Limitées' },
 ];
 
 export default function Inscription() {
@@ -22,8 +22,8 @@ export default function Inscription() {
                         Inscription
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
-                        Les inscriptions pour l'édition 2025 seront bientôt ouvertes.
-                        Prépare-toi mentalement.
+                        Les inscriptions pour l'édition 2026 seront bientôt ouvertes.
+                        Départ le samedi 25 juillet à 8h, puis chaque heure jusqu'à 19h.
                     </p>
                 </section>
 

@@ -15,14 +15,15 @@ export default function Resultats() {
                         Résultats
                     </h1>
                     <p className="text-gris text-sm tracking-wide mt-4 max-w-md mx-auto">
-                        Les résultats de l'édition 2025 seront publiés ici après la course.
+                        Les résultats et chronos de chaque boucle seront disponibles en direct pendant la course.
+                        Le classement final sera publié ici après l'événement.
                     </p>
                 </section>
 
                 {/* Empty state */}
                 <section className="bg-white py-12 px-6">
                     <div className="max-w-xl mx-auto text-center">
-                        <span className="font-chau text-7xl text-or-principal/30">∞</span>
+                        
                         <p className="text-[11px] tracking-[0.25em] uppercase text-gris mt-6">
                             La course n'a pas encore eu lieu
                         </p>

@@ -3,7 +3,7 @@ import MainLayout from '@/Layouts/MainLayout';
 import { useState } from 'react';
 
 const quickFacts = [
-    { label: 'Date', value: 'Automne 2025' },
+    { label: 'Date', value: 'Samedi 25 juillet 2026' },
     { label: 'Départ', value: '8h00' },
     { label: 'Distance / boucle', value: '6,7 km' },
     { label: 'Lieu', value: 'Richelieu (37)' },
@@ -14,10 +14,10 @@ const chapters = [
         index: '01',
         title: 'Date & Horaires',
         rows: [
-            { label: 'Date', value: 'Automne 2025 — date à confirmer' },
-            { label: 'Heure de départ', value: '8h00' },
-            { label: 'Départ de chaque boucle', value: 'Toutes les heures pile' },
-            { label: 'Clôture des engagements', value: 'La veille à 20h00' },
+            { label: 'Date', value: 'Samedi 25 juillet 2026' },
+            { label: 'Première boucle', value: '8h00' },
+            { label: 'Départs horaires', value: "Chaque heure pile jusqu'à 19h" },
+            { label: 'Arrivée conseillée', value: 'Avant 8h pour préparer son installation' },
         ],
     },
     {
@@ -25,9 +25,7 @@ const chapters = [
         title: 'Lieu',
         rows: [
             { label: 'Ville', value: 'Richelieu, Indre-et-Loire (37)' },
-            { label: 'Point de départ', value: 'Centre-ville de Richelieu' },
-            { label: 'Parking', value: 'Gratuit, à proximité du départ' },
-            { label: 'Accès', value: 'À 30 min de Tours, 45 min de Poitiers' },
+            { label: 'Point de départ', value: 'Le jardin de Paco' },
         ],
     },
     {
@@ -37,8 +35,9 @@ const chapters = [
             { label: 'Format', value: 'Backyard Ultra — dernier survivant' },
             { label: 'Distance par boucle', value: '6,706 km (4,167 miles)' },
             { label: 'Temps par boucle', value: '1 heure exactement' },
-            { label: 'Nombre de boucles', value: "Illimité — jusqu'au dernier" },
-            { label: 'Vainqueur', value: "Le dernier coureur à compléter un tour quand tous les autres ont abandonné" },
+            { label: 'Max boucles', value: '12 boucles maximum' },
+            { label: 'Élimination', value: "Une boucle non terminée en 1h entraîne l'élimination" },
+            { label: 'Vainqueur', value: "Le dernier coureur capable de repartir pour une nouvelle boucle, ou — si plusieurs partants lors de la dernière boucle — celui qui a mis le moins de temps sur les 12 boucles" },
         ],
     },
     {
@@ -47,21 +46,33 @@ const chapters = [
         rows: [
             { label: 'Départ', value: "Tous les coureurs partent ensemble à l'heure pile" },
             { label: 'Temps limite', value: "Chaque boucle doit être complétée en moins d'1 heure" },
-            { label: 'Abandon', value: "Un coureur qui ne prend pas le départ d'une boucle est éliminé" },
-            { label: 'Ravitaillement', value: 'Un ravitaillement central est disponible entre chaque boucle' },
+            { label: 'Élimination', value: "Ne pas terminer une boucle en 1h ou ne pas repartir = élimination" },
+            { label: 'Ravitaillement', value: 'Eau et fruits disponibles entre chaque boucle' },
+            { label: 'Dossard', value: 'Dossard visible, épingles recommandées' },
             { label: 'Balisage', value: 'Parcours entièrement balisé et sécurisé' },
-            { label: 'Nuit', value: 'Éclairage frontal obligatoire après le coucher du soleil' },
-            { label: 'Dossard', value: 'Obligatoire, visible à tout moment' },
         ],
     },
     {
         index: '05',
-        title: 'Équipement obligatoire',
+        title: 'À prévoir',
         rows: [
-            { label: 'Éclairage', value: 'Lampe frontale avec pile de rechange' },
-            { label: 'Vêtements', value: 'Coupe-vent ou veste imperméable selon météo' },
-            { label: 'Téléphone', value: "Chargé, avec le numéro de l'organisation enregistré" },
-            { label: 'Hydratation', value: 'Flasque ou gourde recommandée' },
+            { label: 'Épingles', value: 'Épingles pour fixer le dossard' },
+            { label: 'Ravitaillement', value: 'Ravitaillement personnel en complément' },
+            { label: 'Hydratation', value: "Flasque d'eau ou gourde" },
+            { label: 'Vêtements', value: 'Équipement adapté à la météo' },
+            { label: 'Rechange', value: 'Tenue de rechange pendant et après la course' },
+        ],
+    },
+    {
+        index: '06',
+        title: 'Services & convivialité',
+        rows: [
+            { label: 'Accueil', value: 'Arrivez avant 8h pour préparer votre camp de base' },
+            { label: 'Installation', value: 'Chaque coureur aura à disposition une chaise personnelle' },
+            { label: 'Ravitaillement', value: 'Eau, fruits et repas sportif à midi' },
+            { label: 'Remise des prix', value: 'Après la course, puis soirée autour du four à pain' },
+            { label: 'Récompenses', value: 'Trophée pour le vainqueur, médaille pour tous' },
+            { label: 'Résultats', value: 'Chronos boucles par boucles disponibles en direct' },
         ],
     },
 ];
