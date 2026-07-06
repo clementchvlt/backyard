@@ -18,8 +18,6 @@ class Participant extends Model
         'bib_number',
     ];
 
-    protected $appends = ['profile_picture_url'];
-
     protected function casts(): array
     {
         return [

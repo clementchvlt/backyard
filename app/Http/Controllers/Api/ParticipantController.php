@@ -13,7 +13,9 @@ class ParticipantController extends Controller
     public function index()
     {
         return response()->json(
-            Participant::orderBy('bib_number')->get()
+            Participant::select('id', 'first_name', 'last_name', 'date_of_birth', 'bib_number', 'profile_picture', 'created_at', 'updated_at')
+                ->orderBy('bib_number')
+                ->paginate(50)
         );
     }
 
@@ -32,12 +34,12 @@ class ParticipantController extends Controller
                 ->store('participants', 'public');
         }
 
-        return response()->json(Participant::create($validated), 201);
+        return response()->json(Participant::create($validated)->append('profile_picture_url'), 201);
     }
 
     public function show(Participant $participant)
     {
-        return response()->json($participant);
+        return response()->json($participant->append('profile_picture_url'));
     }
 
     public function update(Request $request, Participant $participant)
@@ -63,7 +65,7 @@ class ParticipantController extends Controller
 
         $participant->update($validated);
 
-        return response()->json($participant->fresh());
+        return response()->json($participant->fresh()->append('profile_picture_url'));
     }
 
     public function destroy(Participant $participant)
