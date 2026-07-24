@@ -1,7 +1,22 @@
 import { Head, Link } from '@inertiajs/react';
+import { useRef } from 'react';
 import MainLayout from '@/Layouts/MainLayout';
 
 export default function Welcome() {
+    // 5 clics rapprochés sur le logo → révèle le lien CONNEXION dans le menu
+    const logoClicksRef = useRef({ count: 0, last: 0 });
+
+    const handleLogoClick = () => {
+        const now = Date.now();
+        const ref = logoClicksRef.current;
+        ref.count = now - ref.last < 2000 ? ref.count + 1 : 1;
+        ref.last = now;
+        if (ref.count >= 5) {
+            ref.count = 0;
+            window.dispatchEvent(new CustomEvent('reveal-admin'));
+        }
+    };
+
     return (
         <>
             <Head title="Accueil" />
@@ -15,7 +30,9 @@ export default function Welcome() {
                     <img
                         src="/images/Logo du bg 2.svg"
                         alt="La Backyard des Mools"
-                        className="w-96 md:w-[32rem] mb-6"
+                        className="w-96 md:w-[32rem] mb-6 select-none"
+                        onClick={handleLogoClick}
+                        draggable="false"
                     />
 
                     <p className="text-[10px] tracking-[0.35em] text-gris uppercase mb-4">

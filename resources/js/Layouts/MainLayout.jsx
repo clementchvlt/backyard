@@ -24,8 +24,15 @@ export default function MainLayout({ children }) {
             }
         };
 
+        // Déclenché par 5 clics sur le logo de la page d'accueil (utile sur mobile)
+        const onReveal = () => setAdminMode(true);
+
         window.addEventListener('keydown', onKeyDown);
-        return () => window.removeEventListener('keydown', onKeyDown);
+        window.addEventListener('reveal-admin', onReveal);
+        return () => {
+            window.removeEventListener('keydown', onKeyDown);
+            window.removeEventListener('reveal-admin', onReveal);
+        };
     }, [adminMode]);
 
     const navLinks = adminMode
