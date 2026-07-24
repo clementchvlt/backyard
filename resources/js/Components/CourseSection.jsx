@@ -7,6 +7,7 @@ import {
     toApiDateTime,
     loopStartDate,
     timeToArrivalDate,
+    parseDurationInput,
     statusInfo,
     makeServerClock,
 } from '@/utils/race';
@@ -225,13 +226,14 @@ function PointagePanel({ state, busy, onArrive, onGroupArrive, onDnf, onEditCell
     const [groupMode, setGroupMode] = useState(false);
     const [selected, setSelected] = useState([]);
     const [groupTime, setGroupTime] = useState('');
+    const [groupInputMode, setGroupInputMode] = useState('clock'); // 'clock' | 'duration'
     const [query, setQuery] = useState('');
 
     const loop = pinnedLoop ?? currentLoop;
     const isCurrent = loop === currentLoop;
 
     // Si la boucle affichée change (navigation ou bascule auto), on purge la sélection
-    useEffect(() => { setSelected([]); setGroupMode(false); setGroupTime(''); }, [loop]);
+    useEffect(() => { setSelected([]); setGroupMode(false); setGroupTime(''); setGroupInputMode('clock'); }, [loop]);
 
     // On se base sur l'état des cellules : permet la saisie rétroactive sur les boucles passées
     const cellOf = (p) => p.loops?.[loop - 1];
@@ -243,10 +245,21 @@ function PointagePanel({ state, busy, onArrive, onGroupArrive, onDnf, onEditCell
     const toggle = (id) =>
         setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
+    const groupArrivalDate = () => {
+        if (!groupTime) return null;
+        if (groupInputMode === 'duration') {
+            const sec = parseDurationInput(groupTime);
+            const start = loopStartDate(race, loop);
+            return sec != null && start ? new Date(start.getTime() + sec * 1000) : null;
+        }
+        return timeToArrivalDate(race, loop, groupTime);
+    };
+
     const validateGroup = async () => {
-        // Sur une boucle passée, l'heure est obligatoire ("maintenant" n'aurait pas de sens)
-        if (!isCurrent && !groupTime) return;
-        const arrivedAt = groupTime ? timeToArrivalDate(race, loop, groupTime) : null;
+        // Sur une boucle passée ou en mode "temps", une saisie est obligatoire
+        const needsInput = !isCurrent || groupInputMode === 'duration';
+        const arrivedAt = groupArrivalDate();
+        if (needsInput && !arrivedAt) return;
         const ok = await onGroupArrive(selected, loop, arrivedAt ? toApiDateTime(arrivedAt) : null);
         if (ok) { setSelected([]); setGroupMode(false); setGroupTime(''); }
     };
@@ -385,24 +398,62 @@ function PointagePanel({ state, busy, onArrive, onGroupArrive, onDnf, onEditCell
             {groupMode && (
                 <div className="mt-3 border-t border-gray-100 pt-3 flex flex-wrap items-center gap-2">
                     <span className="text-xs text-gris">{selected.length} sélectionné{selected.length > 1 ? 's' : ''}</span>
-                    <input
-                        type="time"
-                        step="1"
-                        value={groupTime}
-                        onChange={(e) => setGroupTime(e.target.value)}
-                        className="border border-gray-200 bg-creme px-2 py-1.5 text-xs text-noir focus:outline-none focus:border-or-principal"
-                        title={isCurrent ? "Heure d'arrivée (vide = maintenant)" : "Heure d'arrivée (obligatoire)"}
-                    />
+                    <div className="flex border border-gray-200">
+                        <button
+                            onClick={() => { setGroupInputMode('clock'); setGroupTime(''); }}
+                            className={`px-2.5 py-1.5 text-[10px] tracking-[0.1em] uppercase transition-colors ${
+                                groupInputMode === 'clock' ? 'bg-or-principal/10 text-or-principal' : 'text-gris hover:text-or-principal'
+                            }`}
+                        >
+                            Heure
+                        </button>
+                        <button
+                            onClick={() => { setGroupInputMode('duration'); setGroupTime(''); }}
+                            className={`px-2.5 py-1.5 text-[10px] tracking-[0.1em] uppercase border-l border-gray-200 transition-colors ${
+                                groupInputMode === 'duration' ? 'bg-or-principal/10 text-or-principal' : 'text-gris hover:text-or-principal'
+                            }`}
+                        >
+                            Temps
+                        </button>
+                    </div>
+                    {groupInputMode === 'clock' ? (
+                        <input
+                            type="time"
+                            step="1"
+                            value={groupTime}
+                            onChange={(e) => setGroupTime(e.target.value)}
+                            className="border border-gray-200 bg-creme px-2 py-1.5 text-xs text-noir focus:outline-none focus:border-or-principal"
+                            title={isCurrent ? "Heure d'arrivée (vide = maintenant)" : "Heure d'arrivée (obligatoire)"}
+                        />
+                    ) : (
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="52:30"
+                            value={groupTime}
+                            onChange={(e) => setGroupTime(e.target.value)}
+                            className="border border-gray-200 bg-creme px-2 py-1.5 text-xs text-noir w-24 focus:outline-none focus:border-or-principal"
+                            title="Temps de boucle (mm:ss ou h:mm:ss)"
+                        />
+                    )}
                     <button
                         onClick={validateGroup}
-                        disabled={busy || selected.length === 0 || (!isCurrent && !groupTime)}
+                        disabled={busy || selected.length === 0 || ((!isCurrent || groupInputMode === 'duration') && !groupArrivalDate())}
                         className="bg-or-principal text-creme text-[10px] tracking-[0.15em] uppercase px-4 py-2 hover:bg-or-sombre transition-colors disabled:opacity-50"
                     >
                         ✓ Valider l'arrivée groupée
                     </button>
-                    {!isCurrent && !groupTime && (
-                        <span className="text-[11px] text-orange-600">Heure obligatoire sur une boucle passée</span>
-                    )}
+                    <span className="text-[11px] text-gris">
+                        {groupTime && groupArrivalDate()
+                            ? `→ arrivée à ${fmtClock(groupArrivalDate().toISOString())}`
+                            : groupTime && !groupArrivalDate()
+                                ? 'Format invalide'
+                                : !isCurrent
+                                    ? 'Saisie obligatoire sur une boucle passée'
+                                    : groupInputMode === 'clock'
+                                        ? 'Vide = maintenant'
+                                        : ''}
+                    </span>
                 </div>
             )}
 
@@ -455,10 +506,46 @@ function PointagePanel({ state, busy, onArrive, onGroupArrive, onDnf, onEditCell
 
 function CellEditor({ race, participant, loop, cell, busy, onSave, onDnf, onClear, onClose }) {
     const start = loopStartDate(race, loop);
+    const durSec = race.loop_duration_minutes * 60;
+
+    const [mode, setMode] = useState('clock'); // 'clock' = heure d'arrivée | 'duration' = temps de boucle
     const [time, setTime] = useState(() => {
         const base = cell?.arrived_at ? new Date(cell.arrived_at) : new Date();
         return toDatetimeLocal(base).slice(11, 19);
     });
+    const [duration, setDuration] = useState(() => (cell?.seconds != null ? fmtDur(cell.seconds) : ''));
+
+    const computeArrival = () => {
+        if (mode === 'duration') {
+            const sec = parseDurationInput(duration);
+            if (sec == null || !start) return null;
+            return new Date(start.getTime() + sec * 1000);
+        }
+        return timeToArrivalDate(race, loop, time);
+    };
+
+    const save = () => {
+        const d = computeArrival();
+        if (!d) return;
+        const deadline = new Date(start.getTime() + durSec * 1000);
+        if (d <= start || d > deadline) {
+            const ok = window.confirm(
+                `Attention : cette arrivée est en dehors de la fenêtre de la boucle ${loop} `
+                + `(${fmtClock(start.toISOString())} → ${fmtClock(deadline.toISOString())}). `
+                + `Le coureur sera compté hors délai et éliminé. Enregistrer quand même ?`
+            );
+            if (!ok) return;
+        }
+        onSave(toApiDateTime(d));
+    };
+
+    // Aperçu croisé : l'un se déduit de l'autre
+    const preview = computeArrival();
+
+    const tabCls = (active) =>
+        `flex-1 text-[10px] tracking-[0.1em] uppercase py-2 border transition-colors ${
+            active ? 'border-or-principal text-or-principal bg-or-principal/5' : 'border-gray-200 text-gris hover:text-or-principal'
+        }`;
 
     return (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-noir/40 p-4" onClick={onClose}>
@@ -468,37 +555,53 @@ function CellEditor({ race, participant, loop, cell, busy, onSave, onDnf, onClea
                     #{participant.bib_number} {participant.first_name} {participant.last_name}
                 </p>
                 <p className="text-xs text-gris mt-1">
-                    Départ théorique : {start ? fmtClock(start.toISOString()) : '—'} · Heure limite : {start ? fmtClock(new Date(start.getTime() + race.loop_duration_minutes * 60000).toISOString()) : '—'}
+                    Départ théorique : {start ? fmtClock(start.toISOString()) : '—'} · Heure limite : {start ? fmtClock(new Date(start.getTime() + durSec * 1000).toISOString()) : '—'}
                 </p>
 
-                <label className="block mt-4">
-                    <span className="text-[10px] tracking-[0.15em] uppercase text-gris">Heure d'arrivée</span>
-                    <input
-                        type="time"
-                        step="1"
-                        value={time}
-                        onChange={(e) => setTime(e.target.value)}
-                        className="mt-1 w-full border border-gray-200 bg-creme px-2 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
-                    />
-                </label>
+                <div className="flex gap-1.5 mt-4">
+                    <button onClick={() => setMode('clock')} className={tabCls(mode === 'clock')}>Heure d'arrivée</button>
+                    <button onClick={() => setMode('duration')} className={tabCls(mode === 'duration')}>Temps de boucle</button>
+                </div>
 
-                <div className="flex gap-2 mt-4">
+                {mode === 'clock' ? (
+                    <label className="block mt-3">
+                        <span className="text-[10px] tracking-[0.15em] uppercase text-gris">Heure d'arrivée</span>
+                        <input
+                            type="time"
+                            step="1"
+                            value={time}
+                            onChange={(e) => setTime(e.target.value)}
+                            className="mt-1 w-full border border-gray-200 bg-creme px-2 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
+                        />
+                    </label>
+                ) : (
+                    <label className="block mt-3">
+                        <span className="text-[10px] tracking-[0.15em] uppercase text-gris">Temps de boucle (mm:ss ou h:mm:ss)</span>
+                        <input
+                            type="text"
+                            inputMode="numeric"
+                            placeholder="52:30"
+                            value={duration}
+                            onChange={(e) => setDuration(e.target.value)}
+                            className="mt-1 w-full border border-gray-200 bg-creme px-2 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
+                        />
+                    </label>
+                )}
+
+                <p className="text-[11px] text-gris mt-2">
+                    {preview
+                        ? mode === 'duration'
+                            ? `→ arrivée enregistrée à ${fmtClock(preview.toISOString())}`
+                            : `→ temps de boucle : ${fmtDur(Math.round((preview.getTime() - start.getTime()) / 1000))}`
+                        : mode === 'duration' && duration
+                            ? 'Format invalide — exemples : 52:30 ou 1:02:33'
+                            : '\u00a0'}
+                </p>
+
+                <div className="flex gap-2 mt-3">
                     <button
-                        onClick={() => {
-                            const d = timeToArrivalDate(race, loop, time);
-                            if (!d) return;
-                            const deadline = new Date(start.getTime() + race.loop_duration_minutes * 60000);
-                            if (d <= start || d > deadline) {
-                                const ok = window.confirm(
-                                    `Attention : cette heure est en dehors de la fenêtre de la boucle ${loop} `
-                                    + `(${fmtClock(start.toISOString())} → ${fmtClock(deadline.toISOString())}). `
-                                    + `Le coureur sera compté hors délai et éliminé. Enregistrer quand même ?`
-                                );
-                                if (!ok) return;
-                            }
-                            onSave(toApiDateTime(d));
-                        }}
-                        disabled={busy || !time}
+                        onClick={save}
+                        disabled={busy || !preview}
                         className="flex-1 bg-or-principal text-creme text-[10px] tracking-[0.15em] uppercase py-2.5 hover:bg-or-sombre transition-colors disabled:opacity-50"
                     >
                         Enregistrer

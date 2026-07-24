@@ -63,6 +63,20 @@ export function timeToArrivalDate(race, loopNumber, timeStr) {
     return candidate;
 }
 
+/**
+ * Saisie de durée → secondes.
+ * Accepte "52:30" (mm:ss), "1:02:33" (h:mm:ss) ou "52" (minutes).
+ */
+export function parseDurationInput(str) {
+    if (!str) return null;
+    const parts = str.trim().split(':').map((x) => Number(x));
+    if (parts.some((n) => !Number.isFinite(n) || n < 0)) return null;
+    if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    if (parts.length === 2) return parts[0] * 60 + parts[1];
+    if (parts.length === 1) return parts[0] * 60;
+    return null;
+}
+
 /** Libellé + couleurs d'un statut participant */
 export function statusInfo(p) {
     if (p.is_winner) {
