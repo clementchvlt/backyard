@@ -1,160 +1,629 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
+import {
+    fmtDur,
+    fmtClock,
+    fmtDateTime,
+    toDatetimeLocal,
+    toApiDateTime,
+    loopStartDate,
+    timeToArrivalDate,
+    statusInfo,
+    makeServerClock,
+} from '@/utils/race';
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
+/*
+ * Gestion de course — sur le modèle de l'Excel :
+ * on saisit des heures d'arrivée (ou DNF), tout le reste est calculé par le serveur.
+ * Plus de "démarrer / boucle suivante / clôturer" : la course vit toute seule.
+ */
 
-function fmt(totalSeconds) {
-    const abs = Math.abs(totalSeconds);
-    const h = Math.floor(abs / 3600);
-    const m = Math.floor((abs % 3600) / 60).toString().padStart(2, '0');
-    const s = (abs % 60).toString().padStart(2, '0');
-    return h > 0 ? `${h}:${m}:${s}` : `${m}:${s}`;
-}
-
-function fmtTime(isoString) {
-    if (!isoString) return '—';
-    return new Date(isoString).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-}
-
-function toDatetimeLocal(date = new Date()) {
-    const p = (n) => String(n).padStart(2, '0');
-    return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())}T${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
-}
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
+// ─── Petits composants ────────────────────────────────────────────────────────
 
 function StatBox({ label, value, sub, color = 'default' }) {
     const colors = {
         default: 'bg-creme border-gray-200 text-noir',
         gold:    'bg-creme border-or-principal text-or-principal',
         red:     'bg-red-50 border-red-300 text-red-600',
-        orange:  'bg-orange-50 border-orange-300 text-orange-600',
         green:   'bg-green-50 border-green-300 text-green-700',
+        blue:    'bg-blue-50 border-blue-300 text-blue-700',
     };
     return (
         <div className={`border p-4 ${colors[color]}`}>
             <p className="text-[10px] tracking-[0.2em] uppercase text-gris mb-1">{label}</p>
-            <p className="font-chau text-3xl leading-none">{value}</p>
+            <p className="font-chau text-2xl md:text-3xl leading-none truncate">{value}</p>
             {sub && <p className="text-[10px] text-gris mt-1">{sub}</p>}
         </div>
     );
 }
 
-function RunningCard({ p, onFinish, onFinishWithTime, onDnf, loading }) {
-    const [showTime, setShowTime] = useState(false);
-    const [manualTime, setManualTime] = useState('');
+function Avatar({ p, size = 'w-9 h-9' }) {
+    return p.profile_picture_url ? (
+        <img
+            src={p.profile_picture_url}
+            className={`${size} rounded-full object-cover border border-gray-200 shrink-0`}
+            alt=""
+            onError={(e) => { e.currentTarget.style.display = 'none'; }}
+        />
+    ) : (
+        <div className={`${size} rounded-full bg-gray-100 flex items-center justify-center text-[10px] text-gris font-medium uppercase shrink-0`}>
+            {p.first_name?.[0]}{p.last_name?.[0]}
+        </div>
+    );
+}
 
-    const toggleTime = () => {
-        if (!showTime) setManualTime(toDatetimeLocal());
-        setShowTime((s) => !s);
+function normalizeStr(s) {
+    return (s ?? '').toString().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
+/** Filtre un participant par dossard, prénom ou nom (insensible à la casse et aux accents) */
+function matchesQuery(p, q) {
+    const n = normalizeStr(q).trim();
+    if (!n) return true;
+    return (
+        normalizeStr(`${p.first_name} ${p.last_name}`).includes(n) ||
+        normalizeStr(`${p.last_name} ${p.first_name}`).includes(n) ||
+        String(p.bib_number).includes(n)
+    );
+}
+
+function SearchInput({ value, onChange, className = '' }) {
+    return (
+        <div className={`relative ${className}`}>
+            <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gris text-xs pointer-events-none">⌕</span>
+            <input
+                type="search"
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder="Dossard ou nom…"
+                className="w-full border border-gray-200 bg-creme pl-7 pr-2 py-1.5 text-xs text-noir placeholder:text-gris/60 focus:outline-none focus:border-or-principal"
+            />
+        </div>
+    );
+}
+
+function SectionTitle({ children, right }) {
+    return (
+        <div className="flex items-center justify-between mb-3">
+            <h3 className="text-[11px] tracking-[0.25em] uppercase text-noir font-medium">{children}</h3>
+            {right}
+        </div>
+    );
+}
+
+// ─── Paramètres de course ─────────────────────────────────────────────────────
+
+function ParamsPanel({ race, busy, onSave, onReset }) {
+    const [open, setOpen] = useState(!race?.start_at);
+    const [form, setForm] = useState(null);
+    const [confirmReset, setConfirmReset] = useState(false);
+
+    const startEdit = () => {
+        setForm({
+            name: race?.name ?? 'Backyard des Mools 2026',
+            start_at: race?.start_at ? toDatetimeLocal(new Date(race.start_at)) : '',
+            loop_distance_km: race?.loop_distance_km ?? 6.706,
+            loop_duration_minutes: race?.loop_duration_minutes ?? 60,
+            max_loops: race?.max_loops ?? 12,
+        });
     };
 
+    const save = async () => {
+        const ok = await onSave({
+            ...form,
+            start_at: form.start_at ? new Date(form.start_at).toISOString() : null,
+            loop_distance_km: parseFloat(form.loop_distance_km),
+            loop_duration_minutes: parseInt(form.loop_duration_minutes, 10),
+            max_loops: parseInt(form.max_loops, 10),
+        });
+        if (ok) setForm(null);
+    };
+
+    const field = (label, node) => (
+        <label className="block">
+            <span className="text-[10px] tracking-[0.15em] uppercase text-gris">{label}</span>
+            {node}
+        </label>
+    );
+    const inputCls = 'mt-1 w-full border border-gray-200 bg-white px-2 py-1.5 text-sm text-noir focus:outline-none focus:border-or-principal';
+
     return (
-        <div className="border border-gray-200 bg-white p-3 flex flex-col gap-2">
-            <div className="flex items-center gap-2">
-                {p.profile_picture_url ? (
-                    <img src={p.profile_picture_url} className="w-8 h-8 rounded-full object-cover border border-gray-200 shrink-0" alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-                ) : (
-                    <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-[10px] text-gris font-medium uppercase shrink-0">
-                        {p.first_name[0]}{p.last_name[0]}
-                    </div>
-                )}
-                <div className="min-w-0">
-                    <p className="text-[11px] font-medium text-or-principal">#{p.bib_number}</p>
-                    <p className="text-sm font-medium text-noir truncate">{p.last_name}</p>
-                    <p className="text-xs text-gris truncate">{p.first_name}</p>
-                </div>
-            </div>
+        <div className="border border-gray-200 bg-white">
+            <button
+                onClick={() => setOpen((o) => !o)}
+                className="w-full flex items-center justify-between px-4 py-3 text-left"
+            >
+                <span className="text-[11px] tracking-[0.25em] uppercase text-noir font-medium">Paramètres de la course</span>
+                <span className="text-gris text-xs">{open ? '▲' : '▼'}</span>
+            </button>
 
-            {/* Primary actions */}
-            <div className="flex gap-1.5">
-                <button
-                    onClick={onFinish}
-                    disabled={loading}
-                    className="flex-1 bg-or-principal text-creme text-[10px] tracking-[0.1em] uppercase py-2 hover:bg-or-sombre transition-colors disabled:opacity-50"
-                >
-                    ✓ Terminé
-                </button>
-                <button
-                    onClick={toggleTime}
-                    disabled={loading}
-                    title="Saisir l'heure manuellement"
-                    className={`border px-2 text-sm transition-colors ${showTime ? 'border-or-principal text-or-principal bg-or-principal/5' : 'border-gray-200 text-gris hover:text-or-principal hover:border-or-principal'}`}
-                >
-                    ⏱
-                </button>
-                <button
-                    onClick={onDnf}
-                    disabled={loading}
-                    className="flex-1 border border-red-300 text-red-600 text-[10px] tracking-[0.1em] uppercase py-2 hover:bg-red-50 transition-colors disabled:opacity-50"
-                >
-                    ✗ DNF
-                </button>
-            </div>
-
-            {/* Manual time input */}
-            {showTime && (
-                <div className="flex gap-1.5 items-center pt-1 border-t border-gray-100">
-                    <input
-                        type="datetime-local"
-                        step="1"
-                        value={manualTime}
-                        onChange={(e) => setManualTime(e.target.value)}
-                        className="flex-1 border border-gray-200 bg-creme px-2 py-1.5 text-xs text-noir focus:outline-none focus:border-or-principal min-w-0"
-                    />
-                    <button
-                        onClick={() => { onFinishWithTime(manualTime); setShowTime(false); }}
-                        disabled={!manualTime || loading}
-                        className="bg-or-principal text-creme text-[10px] uppercase px-3 py-1.5 hover:bg-or-sombre transition-colors disabled:opacity-50 shrink-0"
-                    >
-                        ✓
-                    </button>
+            {open && (
+                <div className="px-4 pb-4 border-t border-gray-100 pt-4">
+                    {!form ? (
+                        <div className="space-y-2">
+                            <dl className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
+                                <div><dt className="text-[10px] uppercase tracking-[0.15em] text-gris">Nom</dt><dd className="text-noir">{race?.name ?? '—'}</dd></div>
+                                <div><dt className="text-[10px] uppercase tracking-[0.15em] text-gris">Départ (boucle 1)</dt><dd className="text-noir">{race?.start_at ? fmtDateTime(race.start_at) : 'Non défini'}</dd></div>
+                                <div><dt className="text-[10px] uppercase tracking-[0.15em] text-gris">Distance / boucle</dt><dd className="text-noir">{race?.loop_distance_km ?? '—'} km</dd></div>
+                                <div><dt className="text-[10px] uppercase tracking-[0.15em] text-gris">Durée max / boucle</dt><dd className="text-noir">{race?.loop_duration_minutes ?? '—'} min</dd></div>
+                                <div><dt className="text-[10px] uppercase tracking-[0.15em] text-gris">Boucles max</dt><dd className="text-noir">{race?.max_loops ?? '—'}</dd></div>
+                            </dl>
+                            <div className="flex flex-wrap gap-2 pt-2">
+                                <button onClick={startEdit} className="bg-or-principal text-creme text-[10px] tracking-[0.15em] uppercase px-4 py-2 hover:bg-or-sombre transition-colors">
+                                    Modifier
+                                </button>
+                                {race && (
+                                    <button
+                                        onClick={() => setConfirmReset(true)}
+                                        className="border border-red-300 text-red-600 text-[10px] tracking-[0.15em] uppercase px-4 py-2 hover:bg-red-50 transition-colors"
+                                    >
+                                        Effacer toutes les arrivées
+                                    </button>
+                                )}
+                            </div>
+                            {confirmReset && (
+                                <div className="border border-red-300 bg-red-50 p-3 mt-2">
+                                    <p className="text-xs text-red-700 mb-2">
+                                        Toutes les heures d'arrivée et DNF seront supprimés. Les paramètres sont conservés. Continuer ?
+                                    </p>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={async () => { await onReset(); setConfirmReset(false); }}
+                                            disabled={busy}
+                                            className="bg-red-600 text-white text-[10px] tracking-[0.15em] uppercase px-3 py-1.5 hover:bg-red-700 disabled:opacity-50"
+                                        >
+                                            Oui, tout effacer
+                                        </button>
+                                        <button onClick={() => setConfirmReset(false)} className="border border-gray-300 text-gris text-[10px] tracking-[0.15em] uppercase px-3 py-1.5">
+                                            Annuler
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="space-y-3">
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                {field('Nom de la course', (
+                                    <input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                                ))}
+                                {field('Départ (boucle 1)', (
+                                    <input type="datetime-local" step="1" className={inputCls} value={form.start_at} onChange={(e) => setForm({ ...form, start_at: e.target.value })} />
+                                ))}
+                                {field('Distance d\'une boucle (km)', (
+                                    <input type="number" step="0.001" min="0.001" className={inputCls} value={form.loop_distance_km} onChange={(e) => setForm({ ...form, loop_distance_km: e.target.value })} />
+                                ))}
+                                {field('Durée max d\'une boucle (minutes)', (
+                                    <input type="number" min="1" className={inputCls} value={form.loop_duration_minutes} onChange={(e) => setForm({ ...form, loop_duration_minutes: e.target.value })} />
+                                ))}
+                                {field('Nombre max de boucles', (
+                                    <input type="number" min="1" max="200" className={inputCls} value={form.max_loops} onChange={(e) => setForm({ ...form, max_loops: e.target.value })} />
+                                ))}
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={save} disabled={busy} className="bg-or-principal text-creme text-[10px] tracking-[0.15em] uppercase px-4 py-2 hover:bg-or-sombre transition-colors disabled:opacity-50">
+                                    Enregistrer
+                                </button>
+                                <button onClick={() => setForm(null)} className="border border-gray-300 text-gris text-[10px] tracking-[0.15em] uppercase px-4 py-2">
+                                    Annuler
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
         </div>
     );
 }
 
-function FinisherBadge({ p }) {
-    const loopTime = p.elapsed_seconds != null ? fmt(p.elapsed_seconds) : null;
+// ─── Pointage (boucle en cours) ───────────────────────────────────────────────
+
+function PointagePanel({ state, busy, onArrive, onGroupArrive, onDnf, onEditCell }) {
+    const { race, participants } = state;
+    const currentLoop = race.current_loop;
+
+    const [pinnedLoop, setPinnedLoop] = useState(null); // null = suivre la boucle en cours
+    const [groupMode, setGroupMode] = useState(false);
+    const [selected, setSelected] = useState([]);
+    const [groupTime, setGroupTime] = useState('');
+    const [query, setQuery] = useState('');
+
+    const loop = pinnedLoop ?? currentLoop;
+    const isCurrent = loop === currentLoop;
+
+    // Si la boucle affichée change (navigation ou bascule auto), on purge la sélection
+    useEffect(() => { setSelected([]); setGroupMode(false); setGroupTime(''); }, [loop]);
+
+    // On se base sur l'état des cellules : permet la saisie rétroactive sur les boucles passées
+    const cellOf = (p) => p.loops?.[loop - 1];
+    const visible = participants.filter((p) => matchesQuery(p, query));
+    const awaiting = visible.filter((p) => ['pending', 'missed'].includes(cellOf(p)?.state));
+    const arrivedThisLoop = visible.filter((p) => cellOf(p)?.state === 'valid');
+    const stopped = visible.filter((p) => ['late', 'dnf'].includes(cellOf(p)?.state));
+
+    const toggle = (id) =>
+        setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+
+    const validateGroup = async () => {
+        // Sur une boucle passée, l'heure est obligatoire ("maintenant" n'aurait pas de sens)
+        if (!isCurrent && !groupTime) return;
+        const arrivedAt = groupTime ? timeToArrivalDate(race, loop, groupTime) : null;
+        const ok = await onGroupArrive(selected, loop, arrivedAt ? toApiDateTime(arrivedAt) : null);
+        if (ok) { setSelected([]); setGroupMode(false); setGroupTime(''); }
+    };
+
     return (
-        <div className="border border-or-principal bg-white px-3 py-2 flex items-center justify-between gap-2">
-            <div>
-                <span className="text-[11px] font-medium text-or-principal mr-1">#{p.bib_number}</span>
-                <span className="text-sm text-noir font-medium">{p.last_name}</span>
-                <span className="text-xs text-gris ml-1">{p.first_name}</span>
+        <div className="border border-gray-200 bg-white p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                    <h3 className="text-[11px] tracking-[0.25em] uppercase text-noir font-medium">Pointage</h3>
+                    <div className="flex items-center border border-gray-200">
+                        <button
+                            onClick={() => setPinnedLoop(Math.max(1, loop - 1))}
+                            disabled={loop <= 1}
+                            className="px-2.5 py-1 text-gris hover:text-or-principal disabled:opacity-30"
+                            title="Boucle précédente"
+                        >
+                            ◀
+                        </button>
+                        <span className={`px-2 py-1 text-xs font-medium ${isCurrent ? 'text-noir' : 'text-orange-600'}`}>
+                            Boucle {loop}{!isCurrent && ' (passée)'}
+                        </span>
+                        <button
+                            onClick={() => setPinnedLoop(Math.min(currentLoop, loop + 1))}
+                            disabled={loop >= currentLoop}
+                            className="px-2.5 py-1 text-gris hover:text-or-principal disabled:opacity-30"
+                            title="Boucle suivante"
+                        >
+                            ▶
+                        </button>
+                    </div>
+                    {!isCurrent && (
+                        <button
+                            onClick={() => setPinnedLoop(null)}
+                            className="text-[10px] tracking-[0.1em] uppercase text-or-principal border border-or-principal px-2.5 py-1 hover:bg-or-principal/5 transition-colors"
+                        >
+                            ↩ Boucle en cours ({currentLoop})
+                        </button>
+                    )}
+                </div>
+                <div className="flex items-center gap-2 flex-1 sm:flex-none justify-end">
+                    <SearchInput value={query} onChange={setQuery} className="w-full sm:w-44" />
+                    <button
+                        onClick={() => { setGroupMode((g) => !g); setSelected([]); }}
+                        className={`shrink-0 text-[10px] tracking-[0.15em] uppercase px-3 py-1.5 border transition-colors ${
+                            groupMode ? 'border-or-principal text-or-principal bg-or-principal/5' : 'border-gray-200 text-gris hover:border-or-principal hover:text-or-principal'
+                        }`}
+                    >
+                        {groupMode ? 'Annuler le mode groupé' : 'Arrivée groupée'}
+                    </button>
+                </div>
             </div>
-            {loopTime && <span className="text-xs text-gris shrink-0">{loopTime}</span>}
+
+            {!isCurrent && (
+                <p className="text-[11px] text-orange-600 bg-orange-50 border border-orange-200 px-3 py-2 mb-3">
+                    Saisie rétroactive sur une boucle passée : les coureurs marqués « non revenus » peuvent encore être pointés
+                    (l'heure exacte est obligatoire). Le classement se recalcule automatiquement.
+                </p>
+            )}
+
+            {awaiting.length === 0 ? (
+                <p className="text-sm text-gris py-2">
+                    {query.trim()
+                        ? 'Aucun coureur attendu ne correspond à la recherche.'
+                        : isCurrent
+                            ? 'Tous les coureurs encore en course ont été pointés pour cette boucle.'
+                            : 'Aucune saisie manquante sur cette boucle.'}
+                </p>
+            ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                    {awaiting.map((p) => (
+                        <div
+                            key={p.id}
+                            className={`border p-3 flex flex-col gap-2 transition-colors ${
+                                groupMode && selected.includes(p.id) ? 'border-or-principal bg-or-principal/5' : 'border-gray-200 bg-white'
+                            }`}
+                            onClick={groupMode ? () => toggle(p.id) : undefined}
+                            role={groupMode ? 'button' : undefined}
+                        >
+                            <div className="flex items-center gap-2">
+                                {groupMode && (
+                                    <input type="checkbox" readOnly checked={selected.includes(p.id)} className="text-or-principal border-gray-300 focus:ring-or-principal" />
+                                )}
+                                <Avatar p={p} />
+                                <div className="min-w-0">
+                                    <p className="text-[11px] font-medium text-or-principal">#{p.bib_number}</p>
+                                    <p className="text-sm font-medium text-noir truncate">{p.first_name} {p.last_name}</p>
+                                    {cellOf(p)?.state === 'missed' && (
+                                        <p className="text-[10px] text-red-500 uppercase tracking-[0.1em]">Non revenu</p>
+                                    )}
+                                </div>
+                            </div>
+                            {!groupMode && (
+                                <div className="flex gap-1.5">
+                                    {isCurrent ? (
+                                        <button
+                                            onClick={() => onArrive(p.id, loop)}
+                                            disabled={busy}
+                                            className="flex-1 bg-or-principal text-creme text-[11px] tracking-[0.1em] uppercase py-2.5 hover:bg-or-sombre transition-colors disabled:opacity-50"
+                                        >
+                                            ✓ Arrivée
+                                        </button>
+                                    ) : (
+                                        <button
+                                            onClick={() => onEditCell(p, loop)}
+                                            disabled={busy}
+                                            className="flex-1 bg-or-principal text-creme text-[11px] tracking-[0.1em] uppercase py-2.5 hover:bg-or-sombre transition-colors disabled:opacity-50"
+                                        >
+                                            ⏱ Saisir l'heure
+                                        </button>
+                                    )}
+                                    {isCurrent && (
+                                        <button
+                                            onClick={() => onEditCell(p, loop)}
+                                            disabled={busy}
+                                            title="Saisir une heure manuellement"
+                                            className="border border-gray-200 text-gris px-3 text-sm hover:text-or-principal hover:border-or-principal transition-colors"
+                                        >
+                                            ⏱
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => onDnf(p.id, loop)}
+                                        disabled={busy}
+                                        title="Abandon"
+                                        className="border border-red-300 text-red-600 px-3 text-[11px] uppercase hover:bg-red-50 transition-colors disabled:opacity-50"
+                                    >
+                                        DNF
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            {groupMode && (
+                <div className="mt-3 border-t border-gray-100 pt-3 flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-gris">{selected.length} sélectionné{selected.length > 1 ? 's' : ''}</span>
+                    <input
+                        type="time"
+                        step="1"
+                        value={groupTime}
+                        onChange={(e) => setGroupTime(e.target.value)}
+                        className="border border-gray-200 bg-creme px-2 py-1.5 text-xs text-noir focus:outline-none focus:border-or-principal"
+                        title={isCurrent ? "Heure d'arrivée (vide = maintenant)" : "Heure d'arrivée (obligatoire)"}
+                    />
+                    <button
+                        onClick={validateGroup}
+                        disabled={busy || selected.length === 0 || (!isCurrent && !groupTime)}
+                        className="bg-or-principal text-creme text-[10px] tracking-[0.15em] uppercase px-4 py-2 hover:bg-or-sombre transition-colors disabled:opacity-50"
+                    >
+                        ✓ Valider l'arrivée groupée
+                    </button>
+                    {!isCurrent && !groupTime && (
+                        <span className="text-[11px] text-orange-600">Heure obligatoire sur une boucle passée</span>
+                    )}
+                </div>
+            )}
+
+            {arrivedThisLoop.length > 0 && (
+                <div className="mt-4 border-t border-gray-100 pt-3">
+                    <p className="text-[10px] tracking-[0.2em] uppercase text-gris mb-2">Déjà arrivés sur cette boucle</p>
+                    <div className="flex flex-wrap gap-1.5">
+                        {arrivedThisLoop.map((p) => {
+                            const cell = cellOf(p);
+                            return (
+                                <button
+                                    key={p.id}
+                                    onClick={() => onEditCell(p, loop)}
+                                    title="Corriger"
+                                    className="border border-green-300 bg-green-50 text-green-700 px-2.5 py-1.5 text-xs hover:border-or-principal transition-colors"
+                                >
+                                    #{p.bib_number} {p.last_name} — {fmtClock(cell.arrived_at)}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
+
+            {stopped.length > 0 && (
+                <div className="mt-4 border-t border-gray-100 pt-3">
+                    <p className="text-[10px] tracking-[0.2em] uppercase text-gris mb-2">Arrêtés sur cette boucle (cliquer pour corriger)</p>
+                    <div className="flex flex-wrap gap-1.5">
+                        {stopped.map((p) => {
+                            const cell = cellOf(p);
+                            return (
+                                <button
+                                    key={p.id}
+                                    onClick={() => onEditCell(p, loop)}
+                                    title="Corriger"
+                                    className="border border-red-300 bg-red-50 text-red-600 px-2.5 py-1.5 text-xs hover:border-or-principal transition-colors"
+                                >
+                                    #{p.bib_number} {p.last_name} — {cell.state === 'dnf' ? 'Abandon' : 'Hors délai'}
+                                </button>
+                            );
+                        })}
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
 
-function LoopHistoryTable({ loops, onLoopClick }) {
-    if (!loops?.length) return null;
+// ─── Éditeur de cellule (grille) ──────────────────────────────────────────────
+
+function CellEditor({ race, participant, loop, cell, busy, onSave, onDnf, onClear, onClose }) {
+    const start = loopStartDate(race, loop);
+    const [time, setTime] = useState(() => {
+        const base = cell?.arrived_at ? new Date(cell.arrived_at) : new Date();
+        return toDatetimeLocal(base).slice(11, 19);
+    });
+
     return (
-        <div>
-            <h3 className="text-[11px] tracking-[0.2em] uppercase text-gris mb-3">Historique des boucles</h3>
-            <div className="overflow-x-auto">
-                <table className="w-full text-left">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-noir/40 p-4" onClick={onClose}>
+            <div className="bg-white border border-gray-200 w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
+                <p className="text-[10px] tracking-[0.25em] uppercase text-gris">Boucle {loop}</p>
+                <p className="font-chau text-xl text-noir mt-1">
+                    #{participant.bib_number} {participant.first_name} {participant.last_name}
+                </p>
+                <p className="text-xs text-gris mt-1">
+                    Départ théorique : {start ? fmtClock(start.toISOString()) : '—'} · Heure limite : {start ? fmtClock(new Date(start.getTime() + race.loop_duration_minutes * 60000).toISOString()) : '—'}
+                </p>
+
+                <label className="block mt-4">
+                    <span className="text-[10px] tracking-[0.15em] uppercase text-gris">Heure d'arrivée</span>
+                    <input
+                        type="time"
+                        step="1"
+                        value={time}
+                        onChange={(e) => setTime(e.target.value)}
+                        className="mt-1 w-full border border-gray-200 bg-creme px-2 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
+                    />
+                </label>
+
+                <div className="flex gap-2 mt-4">
+                    <button
+                        onClick={() => {
+                            const d = timeToArrivalDate(race, loop, time);
+                            if (!d) return;
+                            const deadline = new Date(start.getTime() + race.loop_duration_minutes * 60000);
+                            if (d <= start || d > deadline) {
+                                const ok = window.confirm(
+                                    `Attention : cette heure est en dehors de la fenêtre de la boucle ${loop} `
+                                    + `(${fmtClock(start.toISOString())} → ${fmtClock(deadline.toISOString())}). `
+                                    + `Le coureur sera compté hors délai et éliminé. Enregistrer quand même ?`
+                                );
+                                if (!ok) return;
+                            }
+                            onSave(toApiDateTime(d));
+                        }}
+                        disabled={busy || !time}
+                        className="flex-1 bg-or-principal text-creme text-[10px] tracking-[0.15em] uppercase py-2.5 hover:bg-or-sombre transition-colors disabled:opacity-50"
+                    >
+                        Enregistrer
+                    </button>
+                    <button
+                        onClick={() => onSave(null)}
+                        disabled={busy}
+                        title="Pointer à l'heure actuelle"
+                        className="border border-or-principal text-or-principal text-[10px] tracking-[0.1em] uppercase px-3 hover:bg-or-principal/5 transition-colors"
+                    >
+                        Maintenant
+                    </button>
+                </div>
+                <div className="flex gap-2 mt-2">
+                    <button
+                        onClick={onDnf}
+                        disabled={busy}
+                        className="flex-1 border border-red-300 text-red-600 text-[10px] tracking-[0.15em] uppercase py-2 hover:bg-red-50 transition-colors disabled:opacity-50"
+                    >
+                        DNF (abandon)
+                    </button>
+                    {(cell?.arrived_at || cell?.state === 'dnf') && (
+                        <button
+                            onClick={onClear}
+                            disabled={busy}
+                            className="flex-1 border border-gray-300 text-gris text-[10px] tracking-[0.15em] uppercase py-2 hover:bg-gray-50 transition-colors disabled:opacity-50"
+                        >
+                            Effacer la cellule
+                        </button>
+                    )}
+                </div>
+                <button onClick={onClose} className="w-full mt-3 text-[10px] tracking-[0.2em] uppercase text-gris hover:text-noir">
+                    Fermer
+                </button>
+            </div>
+        </div>
+    );
+}
+
+// ─── Grille type Excel ────────────────────────────────────────────────────────
+
+function cellDisplay(cell) {
+    switch (cell.state) {
+        case 'valid':   return { text: fmtDur(cell.seconds), cls: 'bg-green-50 text-green-700' };
+        case 'late':    return { text: 'HD',  cls: 'bg-red-100 text-red-700 font-medium', title: 'Hors délai' };
+        case 'dnf':     return { text: 'DNF', cls: 'bg-red-100 text-red-700 font-medium' };
+        case 'missed':  return { text: '—',   cls: 'bg-red-50 text-red-400', title: 'Non revenu' };
+        case 'pending': return { text: '…',   cls: 'bg-yellow-50 text-yellow-700 animate-pulse' };
+        case 'closed':  return { text: '',    cls: 'bg-gray-50 text-gray-300' };
+        default:        return { text: '',    cls: 'bg-white text-gray-300' };
+    }
+}
+
+function GridPanel({ state, onEditCell }) {
+    const { race, participants } = state;
+    const [query, setQuery] = useState('');
+    const loops = Array.from({ length: race.max_loops }, (_, i) => i + 1);
+    const visible = participants.filter((p) => matchesQuery(p, query));
+
+    return (
+        <div className="border border-gray-200 bg-white">
+            <div className="px-4 pt-4">
+                <SectionTitle right={<SearchInput value={query} onChange={setQuery} className="w-44" />}>
+                    Grille des boucles
+                </SectionTitle>
+                <p className="text-[11px] text-gris -mt-2 mb-3">
+                    Cliquez sur une cellule pour saisir, corriger ou effacer une arrivée. Vert : boucle validée · Rouge : hors délai / abandon / non revenu.
+                </p>
+            </div>
+            <div className="overflow-x-auto pb-2">
+                <table className="text-xs whitespace-nowrap min-w-full">
                     <thead>
-                        <tr className="border-b border-gray-200">
-                            {['Boucle', 'Départ', 'Finissants', 'DNF'].map((h) => (
-                                <th key={h} className="pb-2 pr-6 text-[10px] tracking-[0.2em] uppercase text-gris font-medium">{h}</th>
-                            ))}
+                        <tr className="border-y border-gray-200 bg-creme">
+                            <th className="sticky left-0 bg-creme px-3 py-2 text-left text-[10px] tracking-[0.15em] uppercase text-gris z-10">Coureur</th>
+                            {loops.map((n) => {
+                                const s = loopStartDate(race, n);
+                                return (
+                                    <th key={n} className="px-2 py-2 text-center text-[10px] tracking-[0.1em] uppercase text-gris" title={s ? `Départ ${fmtClock(s.toISOString())}` : ''}>
+                                        B{n}
+                                    </th>
+                                );
+                            })}
+                            <th className="px-3 py-2 text-center text-[10px] tracking-[0.15em] uppercase text-gris">Boucles</th>
+                            <th className="px-3 py-2 text-center text-[10px] tracking-[0.15em] uppercase text-gris">Cumul</th>
+                            <th className="px-3 py-2 text-center text-[10px] tracking-[0.15em] uppercase text-gris">Statut</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {[...loops].reverse().map((loop) => (
-                            <tr
-                                key={loop.id}
-                                onClick={() => onLoopClick?.(loop)}
-                                className={`border-b border-gray-100 last:border-0 ${onLoopClick ? 'cursor-pointer hover:bg-creme transition-colors' : ''}`}
-                            >
-                                <td className="py-2 pr-6 font-medium text-noir text-sm">Boucle {loop.loop_number}</td>
-                                <td className="py-2 pr-6 text-sm text-gris">{fmtTime(loop.started_at)}</td>
-                                <td className="py-2 pr-6 text-sm text-or-principal font-medium">{loop.finishers_count} ✓</td>
-                                <td className="py-2 text-sm text-red-500">{loop.dnf_count > 0 ? `${loop.dnf_count} ✗` : '—'}</td>
+                        {visible.length === 0 && (
+                            <tr>
+                                <td colSpan={loops.length + 4} className="px-3 py-4 text-center text-gris">
+                                    Aucun coureur ne correspond à la recherche.
+                                </td>
                             </tr>
-                        ))}
+                        )}
+                        {visible.map((p) => {
+                            const st = statusInfo(p);
+                            return (
+                                <tr key={p.id} className="border-b border-gray-100">
+                                    <td className="sticky left-0 bg-white px-3 py-1.5 z-10 border-r border-gray-100">
+                                        <span className="text-or-principal font-medium">#{p.bib_number}</span>{' '}
+                                        <span className="text-noir">{p.first_name} {p.last_name}</span>
+                                    </td>
+                                    {p.loops.map((cell) => {
+                                        const d = cellDisplay(cell);
+                                        return (
+                                            <td key={cell.loop} className="p-0.5 text-center">
+                                                <button
+                                                    onClick={() => onEditCell(p, cell.loop)}
+                                                    title={d.title || (cell.arrived_at ? `Arrivée ${fmtClock(cell.arrived_at)}` : '')}
+                                                    className={`w-full min-w-[52px] px-1.5 py-1.5 ${d.cls} hover:outline hover:outline-1 hover:outline-or-principal`}
+                                                >
+                                                    {d.text || ' '}
+                                                </button>
+                                            </td>
+                                        );
+                                    })}
+                                    <td className="px-3 py-1.5 text-center font-medium text-noir">{p.loops_completed}</td>
+                                    <td className="px-3 py-1.5 text-center text-noir">{p.loops_completed > 0 ? fmtDur(p.total_seconds) : '—'}</td>
+                                    <td className="px-2 py-1.5 text-center">
+                                        <span className={`inline-block border px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] ${st.cls}`}>{st.label}</span>
+                                    </td>
+                                </tr>
+                            );
+                        })}
                     </tbody>
                 </table>
             </div>
@@ -162,1152 +631,191 @@ function LoopHistoryTable({ loops, onLoopClick }) {
     );
 }
 
-function LoopDetailModal({ loop, onClose, token }) {
-    const [detail, setDetail] = useState(null);
-    const [loading, setLoading] = useState(true);
-
-    useEffect(() => {
-        if (!loop) return;
-        setLoading(true);
-        fetch(`/api/admin/race/loops/${loop.id}`, {
-            headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
-        })
-            .then((r) => r.json())
-            .then((d) => setDetail(d))
-            .finally(() => setLoading(false));
-    }, [loop?.id]);
-
-    if (!loop) return null;
-
-    return (
-        <div
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            style={{ backgroundColor: 'rgba(26,26,26,0.6)' }}
-            onClick={onClose}
-        >
-            <div
-                className="bg-creme w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl"
-                onClick={(e) => e.stopPropagation()}
-            >
-                {/* Header */}
-                <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
-                    <div>
-                        <p className="text-or-principal text-[10px] tracking-[0.3em] uppercase">Détail</p>
-                        <h2 className="font-chau text-2xl text-noir">Boucle {loop.loop_number}</h2>
-                        {detail && (
-                            <p className="text-gris text-xs mt-0.5">
-                                Départ {fmtTime(detail.started_at)} — {detail.loop_duration_minutes} min
-                            </p>
-                        )}
-                    </div>
-                    <button
-                        onClick={onClose}
-                        className="text-gris hover:text-noir transition-colors text-xl leading-none p-1"
-                    >
-                        ✕
-                    </button>
-                </div>
-
-                {/* Body */}
-                <div className="px-6 py-5 space-y-6">
-                    {loading ? (
-                        <p className="text-gris text-sm text-center py-8">Chargement…</p>
-                    ) : detail ? (
-                        <>
-                            {/* Finishers */}
-                            {detail.finishers?.length > 0 && (
-                                <div>
-                                    <h3 className="text-[10px] tracking-[0.2em] uppercase text-gris mb-3">
-                                        Classement — {detail.finishers.length} finissant{detail.finishers.length > 1 ? 's' : ''}
-                                    </h3>
-                                    <table className="w-full text-left">
-                                        <thead>
-                                            <tr className="border-b border-gray-200">
-                                                {['#', 'Dossard', 'Nom', 'Arrivée', 'Temps'].map((h) => (
-                                                    <th key={h} className="pb-2 pr-4 text-[10px] tracking-wider uppercase text-gris font-medium last:pr-0">{h}</th>
-                                                ))}
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {detail.finishers.map((f) => (
-                                                <tr key={f.bib_number} className="border-b border-gray-100 last:border-0">
-                                                    <td className="py-2 pr-4 font-chau text-or-principal text-lg leading-none">{f.rank}</td>
-                                                    <td className="py-2 pr-4 text-xs text-gris">#{f.bib_number}</td>
-                                                    <td className="py-2 pr-4 text-sm font-medium text-noir">
-                                                        {f.last_name} <span className="text-gris font-normal">{f.first_name}</span>
-                                                    </td>
-                                                    <td className="py-2 pr-4 text-sm text-gris tabular-nums">{fmtTime(f.finished_at)}</td>
-                                                    <td className="py-2 text-sm text-noir tabular-nums font-medium">
-                                                        {f.elapsed_seconds != null ? fmt(f.elapsed_seconds) : '—'}
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            )}
-
-                            {/* Running (boucle en cours) */}
-                            {detail.running?.length > 0 && (
-                                <div>
-                                    <h3 className="text-[10px] tracking-[0.2em] uppercase text-gris mb-2">
-                                        En course ({detail.running.length})
-                                    </h3>
-                                    <div className="flex flex-wrap gap-2">
-                                        {detail.running.map((p) => (
-                                            <span key={p.bib_number} className="border border-gray-200 bg-white px-2 py-1 text-xs text-gris">
-                                                #{p.bib_number} {p.last_name}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* DNFs */}
-                            {detail.dnfs?.length > 0 && (
-                                <div>
-                                    <h3 className="text-[10px] tracking-[0.2em] uppercase text-gris mb-2">
-                                        Non finissants — {detail.dnfs.length}
-                                    </h3>
-                                    <div className="flex flex-wrap gap-2">
-                                        {detail.dnfs.map((p) => (
-                                            <span key={p.bib_number} className="border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-600">
-                                                #{p.bib_number} {p.last_name}
-                                            </span>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
-
-                            {!detail.finishers?.length && !detail.dnfs?.length && !detail.running?.length && (
-                                <p className="text-gris text-sm text-center py-4">Aucun résultat enregistré.</p>
-                            )}
-                        </>
-                    ) : (
-                        <p className="text-red-500 text-sm text-center py-8">Impossible de charger les données.</p>
-                    )}
-                </div>
-            </div>
-        </div>
-    );
-}
-
-function EliminatedList({ participants, currentLoopNumber, onRestore, loading }) {
-    if (!participants?.length) return null;
-    return (
-        <div>
-            <h3 className="text-[11px] tracking-[0.2em] uppercase text-gris mb-3">
-                Éliminés ({participants.length})
-            </h3>
-            <div className="flex flex-wrap gap-2">
-                {participants
-                    .sort((a, b) => (b.eliminated_at_loop ?? 0) - (a.eliminated_at_loop ?? 0))
-                    .map((p) => (
-                        <div key={p.id} className="border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs text-gris flex items-center gap-2">
-                            <span>
-                                <span className="font-medium text-noir">#{p.bib_number} {p.last_name}</span>
-                                {p.eliminated_at_loop && (
-                                    <span className="ml-1">— éliminé boucle {p.eliminated_at_loop}</span>
-                                )}
-                            </span>
-                            {onRestore && p.eliminated_at_loop === currentLoopNumber && (
-                                <button
-                                    onClick={() => onRestore(p)}
-                                    disabled={loading}
-                                    title="Corriger : remettre en lice"
-                                    className="text-or-principal hover:text-or-sombre transition-colors disabled:opacity-50 shrink-0 text-[10px] tracking-wider uppercase"
-                                >
-                                    ↩ Corriger
-                                </button>
-                            )}
-                        </div>
-                    ))}
-            </div>
-        </div>
-    );
-}
-
-function NotStarted({ onStart, onSchedule, participantCount, loading }) {
-    const [showForm, setShowForm] = useState(false);
-    const [quickDuration, setQuickDuration] = useState(60);
-    const [form, setForm] = useState({
-        date: '2026-07-25',
-        start_time: '08:00',
-        last_departure: '19:00',
-        loop_duration: 60,
-    });
-
-    const handleSchedule = () => {
-        onSchedule({
-            scheduled_start_at:    `${form.date}T${form.start_time}`,
-            last_departure_at:     `${form.date}T${form.last_departure}`,
-            loop_duration_minutes: form.loop_duration,
-        });
-    };
-
-    return (
-        <div className="max-w-lg mx-auto py-12">
-            <div className="text-center mb-8">
-                <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">Prêt au départ</p>
-                <h2 className="font-chau text-5xl text-noir mb-2">Backyard des Mools</h2>
-                <p className="text-gris text-sm">
-                    {participantCount} participant{participantCount !== 1 ? 's' : ''} inscrit{participantCount !== 1 ? 's' : ''}
-                </p>
-            </div>
-
-            <div className="flex flex-col items-center gap-3 mb-6">
-                <div className="flex items-center gap-2">
-                    <button
-                        onClick={() => onStart(quickDuration)}
-                        disabled={loading || participantCount === 0}
-                        className="bg-or-principal text-creme text-[11px] tracking-[0.2em] uppercase px-10 py-4 hover:bg-or-sombre transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                        {loading ? 'Démarrage…' : '▶ Démarrer maintenant'}
-                    </button>
-                    <div className="flex flex-col items-center gap-0.5">
-                        <input
-                            type="number"
-                            min="1"
-                            max="1440"
-                            value={quickDuration}
-                            onChange={(e) => setQuickDuration(Math.max(1, parseInt(e.target.value) || 60))}
-                            className="w-16 border border-gray-300 bg-creme px-2 py-1 text-center text-sm text-noir focus:outline-none focus:border-or-principal"
-                        />
-                        <span className="text-[9px] text-gris uppercase tracking-wide">min/boucle</span>
-                    </div>
-                </div>
-                <button
-                    onClick={() => setShowForm((s) => !s)}
-                    className="text-gris text-[10px] tracking-wider uppercase hover:text-or-principal transition-colors"
-                >
-                    {showForm ? '▲ Masquer' : '⏰ Programmer le départ automatique'}
-                </button>
-            </div>
-
-            {showForm && (
-                <div className="border border-gray-200 p-6 bg-white space-y-4">
-                    <p className="text-[10px] tracking-[0.2em] uppercase text-gris mb-2">Programmation automatique</p>
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="col-span-2">
-                            <label className="block text-xs text-gris mb-1">Date</label>
-                            <input
-                                type="date"
-                                value={form.date}
-                                onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
-                                className="w-full border border-gray-200 bg-creme px-3 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-gris mb-1">1er départ</label>
-                            <input
-                                type="time"
-                                value={form.start_time}
-                                onChange={(e) => setForm((f) => ({ ...f, start_time: e.target.value }))}
-                                className="w-full border border-gray-200 bg-creme px-3 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
-                            />
-                        </div>
-                        <div>
-                            <label className="block text-xs text-gris mb-1">Dernier départ</label>
-                            <input
-                                type="time"
-                                value={form.last_departure}
-                                onChange={(e) => setForm((f) => ({ ...f, last_departure: e.target.value }))}
-                                className="w-full border border-gray-200 bg-creme px-3 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
-                            />
-                        </div>
-                        <div className="col-span-2">
-                            <label className="block text-xs text-gris mb-1">Durée par boucle (minutes)</label>
-                            <input
-                                type="number"
-                                min="1"
-                                max="1440"
-                                value={form.loop_duration}
-                                onChange={(e) => setForm((f) => ({ ...f, loop_duration: parseInt(e.target.value) || 60 }))}
-                                className="w-full border border-gray-200 bg-creme px-3 py-2 text-sm text-noir focus:outline-none focus:border-or-principal"
-                            />
-                        </div>
-                    </div>
-                    <button
-                        onClick={handleSchedule}
-                        disabled={loading || participantCount === 0}
-                        className="w-full bg-or-principal text-creme text-[11px] tracking-[0.2em] uppercase py-3 hover:bg-or-sombre transition-colors disabled:opacity-50"
-                    >
-                        {loading ? 'Enregistrement…' : '⏰ Confirmer la programmation'}
-                    </button>
-                </div>
-            )}
-
-            {participantCount === 0 && (
-                <p className="text-red-600 text-xs text-center mt-4">Ajoutez des participants avant de démarrer.</p>
-            )}
-        </div>
-    );
-}
-
-function Scheduled({ session, participantCount, onStartNow, onCancel, loading }) {
-    const [countdown, setCountdown] = useState('');
-
-    useEffect(() => {
-        const target = new Date(session.scheduled_start_at);
-        const tick = () => {
-            const diff = Math.floor((target - Date.now()) / 1000);
-            if (diff <= 0) { setCountdown('Démarrage en cours…'); return; }
-            const h = Math.floor(diff / 3600);
-            const m = Math.floor((diff % 3600) / 60);
-            const s = diff % 60;
-            setCountdown(
-                `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-            );
-        };
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [session.scheduled_start_at]);
-
-    const startDate = new Date(session.scheduled_start_at);
-
-    return (
-        <div className="text-center py-12">
-            <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">Départ programmé</p>
-            <h2 className="font-chau text-5xl text-noir mb-2">Backyard des Mools</h2>
-            <p className="text-gris text-sm mb-1">
-                {startDate.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })}
-                {' '}à{' '}
-                {startDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-            </p>
-            <p className="text-gris text-xs mb-8">
-                {session.max_loops} boucle{session.max_loops !== 1 ? 's' : ''} max
-                — {session.loop_duration_minutes} min/boucle
-                — {participantCount} participant{participantCount !== 1 ? 's' : ''}
-            </p>
-            <div className="font-chau text-7xl text-or-principal mb-10 tabular-nums tracking-widest">
-                {countdown}
-            </div>
-            <div className="flex justify-center gap-4">
-                <button
-                    onClick={onStartNow}
-                    disabled={loading}
-                    className="bg-or-principal text-creme text-[11px] tracking-[0.2em] uppercase px-8 py-3 hover:bg-or-sombre transition-colors disabled:opacity-50"
-                >
-                    ▶ Démarrer maintenant
-                </button>
-                <button
-                    onClick={onCancel}
-                    disabled={loading}
-                    className="border border-red-300 text-red-600 text-[11px] tracking-[0.2em] uppercase px-8 py-3 hover:bg-red-50 transition-colors disabled:opacity-50"
-                >
-                    ✕ Annuler la programmation
-                </button>
-            </div>
-        </div>
-    );
-}
-
-function RaceFinished({ participants, onReopen, loading }) {
-    const winner = participants?.find((p) => p.is_active);
-    return (
-        <div className="text-center py-16">
-            <p className="text-or-principal text-[10px] tracking-[0.35em] uppercase mb-4">Course terminée</p>
-            {winner && (
-                <>
-                    <p className="font-chau text-6xl text-noir mb-2">#{winner.bib_number}</p>
-                    <p className="font-chau text-3xl text-or-principal mb-1">{winner.last_name} {winner.first_name}</p>
-                    <p className="text-gris text-sm">{winner.loops_completed} boucle{winner.loops_completed !== 1 ? 's' : ''} complétée{winner.loops_completed !== 1 ? 's' : ''}</p>
-                </>
-            )}
-            {onReopen && (
-                <div className="mt-8">
-                    <button
-                        onClick={onReopen}
-                        disabled={loading}
-                        className="border border-or-principal text-or-principal text-[10px] tracking-[0.2em] uppercase px-6 py-2.5 hover:bg-or-principal hover:text-creme transition-colors disabled:opacity-50"
-                    >
-                        ↩ Mode rattrapage — Rouvrir la dernière boucle
-                    </button>
-                    <p className="text-gris text-[10px] mt-2">Remet les participants DNF de la dernière boucle en lice pour correction.</p>
-                </div>
-            )}
-        </div>
-    );
-}
-
-// ─── Group Finish Panel ───────────────────────────────────────────────────────
-
-function GroupFinishPanel({ runningParticipants, token, onDone, onClose }) {
-    const [selected, setSelected]   = useState([]);
-    const [time, setTime]           = useState('');
-    const [saving, setSaving]       = useState(false);
-    const [err, setErr]             = useState(null);
-
-    const allSelected = selected.length === runningParticipants.length && runningParticipants.length > 0;
-
-    const toggleAll = () => setSelected(allSelected ? [] : runningParticipants.map((p) => p.id));
-    const toggle    = (id) => setSelected((s) => s.includes(id) ? s.filter((x) => x !== id) : [...s, id]);
-
-    const confirm = async () => {
-        if (selected.length === 0) return;
-        setSaving(true);
-        setErr(null);
-        try {
-            const body = { participant_ids: selected };
-            if (time) body.finished_at = time;
-            const r = await fetch('/api/admin/race/group-finish', {
-                method: 'POST',
-                headers: {
-                    Accept: 'application/json',
-                    Authorization: `Bearer ${token}`,
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify(body),
-            });
-            const data = await r.json();
-            if (!r.ok) { setErr(data.message); return; }
-            onDone?.();
-        } catch {
-            setErr('Une erreur est survenue.');
-        } finally {
-            setSaving(false);
-        }
-    };
-
-    const sorted = [...runningParticipants].sort((a, b) => a.bib_number - b.bib_number);
-
-    return (
-        <div className="border border-or-clair bg-creme p-4 space-y-4">
-            {/* Header */}
-            <div className="flex items-center justify-between">
-                <span className="text-[10px] tracking-[0.2em] uppercase text-or-sombre font-medium">
-                    Arrivée groupée
-                </span>
-                <div className="flex items-center gap-4">
-                    <label className="flex items-center gap-1.5 text-xs text-gris cursor-pointer select-none">
-                        <input
-                            type="checkbox"
-                            checked={allSelected}
-                            onChange={toggleAll}
-                            className="accent-or-principal"
-                        />
-                        Tous ({runningParticipants.length})
-                    </label>
-                    <button onClick={onClose} className="text-gris hover:text-noir text-xs">✕</button>
-                </div>
-            </div>
-
-            {/* Participant checkboxes */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                {sorted.map((p) => (
-                    <label
-                        key={p.id}
-                        className={`flex items-center gap-2 text-xs px-3 py-2 border cursor-pointer transition-colors select-none ${
-                            selected.includes(p.id)
-                                ? 'border-or-principal bg-white text-noir'
-                                : 'border-gray-200 bg-white text-gris'
-                        }`}
-                    >
-                        <input
-                            type="checkbox"
-                            checked={selected.includes(p.id)}
-                            onChange={() => toggle(p.id)}
-                            className="accent-or-principal shrink-0"
-                        />
-                        <span className="font-mono text-[10px] shrink-0">#{p.bib_number}</span>
-                        <span className="truncate">{p.last_name}</span>
-                    </label>
-                ))}
-            </div>
-
-            {/* Time + confirm */}
-            <div className="flex flex-wrap items-center gap-3 pt-1 border-t border-or-clair">
-                <div className="flex items-center gap-2">
-                    <span className="text-[10px] text-gris uppercase tracking-wide shrink-0">Heure d'arrivée</span>
-                    <input
-                        type="datetime-local"
-                        step="1"
-                        value={time}
-                        onChange={(e) => setTime(e.target.value)}
-                        className="border border-gray-300 px-2 py-1 text-xs bg-white"
-                    />
-                    <button
-                        onClick={() => setTime(toDatetimeLocal())}
-                        className="border border-gray-300 text-gris text-[10px] px-2 py-1 hover:border-or-principal hover:text-or-sombre transition-colors"
-                    >
-                        Maintenant
-                    </button>
-                    {time && (
-                        <button onClick={() => setTime('')} className="text-gris text-[10px] hover:text-noir">
-                            ✕
-                        </button>
-                    )}
-                </div>
-                {err && <span className="text-red-600 text-xs">{err}</span>}
-                <button
-                    onClick={confirm}
-                    disabled={selected.length === 0 || saving}
-                    className="bg-or-principal text-creme text-[10px] tracking-[0.2em] uppercase px-6 py-2 hover:bg-or-sombre transition-colors disabled:opacity-50 ml-auto"
-                >
-                    {saving ? 'Enregistrement…' : `✓ Confirmer l'arrivée (${selected.length})`}
-                </button>
-            </div>
-        </div>
-    );
-}
-
-// ─── Super Admin Panel ────────────────────────────────────────────────────────
-
-function SuperAdminPanel({ token, onRefresh }) {
-    const [open, setOpen]           = useState(false);
-    const [data, setData]           = useState(null);
-    const [loading, setLoading]     = useState(false);
-    const [saving, setSaving]       = useState({});
-    const [msg, setMsg]             = useState(null);
-    const [sessionForm, setSessionForm] = useState({});
-    const [loopForms, setLoopForms]     = useState({});
-    const [resultForms, setResultForms] = useState({});
-
-    const apiFetch = (url, method = 'GET', body = null) =>
-        fetch(url, {
-            method,
-            headers: {
-                Accept: 'application/json',
-                Authorization: `Bearer ${token}`,
-                ...(body ? { 'Content-Type': 'application/json' } : {}),
-            },
-            ...(body ? { body: JSON.stringify(body) } : {}),
-        });
-
-    const fetchData = async () => {
-        setLoading(true);
-        try {
-            const r = await apiFetch('/api/admin/race/super/data');
-            if (r.ok) setData(await r.json());
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    useEffect(() => { if (open) fetchData(); }, [open]);
-
-    useEffect(() => {
-        if (data?.session) {
-            setSessionForm({
-                status:                 data.session.status,
-                loop_duration_minutes:  data.session.loop_duration_minutes,
-                max_loops:              data.session.max_loops ?? '',
-                started_at:             data.session.started_at
-                    ? new Date(data.session.started_at).toISOString().slice(0, 19) : '',
-            });
-        }
-    }, [data?.session]);
-
-    useEffect(() => {
-        if (data?.loops) {
-            const lf = {}, rf = {};
-            data.loops.forEach(loop => {
-                lf[loop.id] = {
-                    started_at: loop.started_at
-                        ? new Date(loop.started_at).toISOString().slice(0, 19) : '',
-                };
-                loop.results.forEach(r => {
-                    rf[r.id] = {
-                        status:      r.status,
-                        finished_at: r.finished_at
-                            ? new Date(r.finished_at).toISOString().slice(0, 19) : '',
-                    };
-                });
-            });
-            setLoopForms(lf);
-            setResultForms(rf);
-        }
-    }, [data?.loops]);
-
-    const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 3000); };
-
-    const save = (key, fn) => async () => {
-        setSaving(s => ({ ...s, [key]: true }));
-        try {
-            const r = await fn();
-            if (r.ok) { flash('✓ Sauvegardé.'); fetchData(); onRefresh?.(); }
-            else { const e = await r.json(); flash('Erreur : ' + (e.message || r.status)); }
-        } finally {
-            setSaving(s => ({ ...s, [key]: false }));
-        }
-    };
-
-    return (
-        <div className="border border-amber-300 bg-amber-50 mt-6">
-            <button
-                onClick={() => setOpen(o => !o)}
-                className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-amber-100 transition-colors"
-            >
-                <span className="flex items-center gap-2 text-amber-800 font-chau tracking-widest text-xs uppercase">
-                    ⚙ Mode Super Admin
-                </span>
-                <span className="text-amber-600 text-xs">{open ? '▲ Fermer' : '▼ Ouvrir'}</span>
-            </button>
-
-            {open && (
-                <div className="border-t border-amber-200 p-4 space-y-8">
-                    <p className="text-[10px] text-amber-700 italic">
-                        Modification manuelle directe de toutes les données — à utiliser uniquement en cas de problème technique.
-                    </p>
-
-                    {msg && (
-                        <div className="bg-amber-100 border border-amber-300 text-amber-800 text-xs px-3 py-2">
-                            {msg}
-                        </div>
-                    )}
-
-                    {loading && <p className="text-xs text-gray-400 italic">Chargement…</p>}
-
-                    {data && (
-                        <>
-                            {/* ── Session ── */}
-                            <section>
-                                <h3 className="font-chau tracking-widest text-[11px] uppercase text-amber-700 border-b border-amber-200 pb-1 mb-3">
-                                    Session
-                                </h3>
-                                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                                    <label className="flex flex-col gap-1">
-                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Statut</span>
-                                        <select
-                                            value={sessionForm.status || ''}
-                                            onChange={e => setSessionForm(f => ({ ...f, status: e.target.value }))}
-                                            className="border border-gray-300 px-2 py-1 text-xs bg-white"
-                                        >
-                                            <option value="pending">pending</option>
-                                            <option value="scheduled">scheduled</option>
-                                            <option value="active">active</option>
-                                            <option value="finished">finished</option>
-                                        </select>
-                                    </label>
-                                    <label className="flex flex-col gap-1">
-                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Durée boucle (min)</span>
-                                        <input
-                                            type="number" min="1" max="1440"
-                                            value={sessionForm.loop_duration_minutes || ''}
-                                            onChange={e => setSessionForm(f => ({ ...f, loop_duration_minutes: e.target.value }))}
-                                            className="border border-gray-300 px-2 py-1 text-xs"
-                                        />
-                                    </label>
-                                    <label className="flex flex-col gap-1">
-                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Départ course</span>
-                                        <input
-                                            type="datetime-local"
-                        step="1"
-                                            value={sessionForm.started_at || ''}
-                                            onChange={e => setSessionForm(f => ({ ...f, started_at: e.target.value }))}
-                                            className="border border-gray-300 px-2 py-1 text-xs"
-                                        />
-                                    </label>
-                                    <label className="flex flex-col gap-1">
-                                        <span className="text-gray-500 uppercase tracking-wide text-[9px]">Max boucles</span>
-                                        <input
-                                            type="number" min="1"
-                                            value={sessionForm.max_loops || ''}
-                                            onChange={e => setSessionForm(f => ({ ...f, max_loops: e.target.value }))}
-                                            className="border border-gray-300 px-2 py-1 text-xs"
-                                        />
-                                    </label>
-                                </div>
-                                <button
-                                    disabled={saving['session']}
-                                    onClick={save('session', () => apiFetch('/api/admin/race/super/session', 'PATCH', {
-                                        status:                 sessionForm.status,
-                                        loop_duration_minutes:  parseInt(sessionForm.loop_duration_minutes),
-                                        max_loops:              sessionForm.max_loops ? parseInt(sessionForm.max_loops) : null,
-                                        started_at:             sessionForm.started_at || null,
-                                    }))}
-                                    className="mt-3 bg-amber-600 text-white text-[10px] tracking-widest uppercase px-4 py-1.5 hover:bg-amber-700 disabled:opacity-50"
-                                >
-                                    {saving['session'] ? 'Sauvegarde…' : 'Sauvegarder la session'}
-                                </button>
-                            </section>
-
-                            {/* ── Boucles & résultats ── */}
-                            <section>
-                                <h3 className="font-chau tracking-widest text-[11px] uppercase text-amber-700 border-b border-amber-200 pb-1 mb-3">
-                                    Boucles & résultats
-                                </h3>
-                                <div className="space-y-4">
-                                    {data.loops.map(loop => (
-                                        <div key={loop.id} className="border border-amber-200 bg-white overflow-hidden">
-                                            {/* Loop header */}
-                                            <div className="flex items-center gap-3 px-3 py-2 bg-amber-50 border-b border-amber-200">
-                                                <span className="font-chau tracking-widest text-xs text-amber-800 shrink-0">
-                                                    Boucle {loop.loop_number}
-                                                </span>
-                                                <input
-                                                    type="datetime-local"
-                        step="1"
-                                                    value={loopForms[loop.id]?.started_at || ''}
-                                                    onChange={e => setLoopForms(f => ({
-                                                        ...f,
-                                                        [loop.id]: { started_at: e.target.value },
-                                                    }))}
-                                                    className="border border-gray-300 px-2 py-0.5 text-xs flex-1 min-w-0"
-                                                />
-                                                <button
-                                                    disabled={saving[`loop-${loop.id}`]}
-                                                    onClick={save(`loop-${loop.id}`, () => apiFetch(
-                                                        `/api/admin/race/super/loops/${loop.id}`, 'PATCH',
-                                                        { started_at: loopForms[loop.id]?.started_at }
-                                                    ))}
-                                                    className="bg-amber-600 text-white text-[9px] tracking-widest uppercase px-3 py-1 hover:bg-amber-700 disabled:opacity-50 whitespace-nowrap"
-                                                >
-                                                    {saving[`loop-${loop.id}`] ? '…' : 'Sauver'}
-                                                </button>
-                                            </div>
-
-                                            {/* Results table */}
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-xs min-w-[520px]">
-                                                    <thead>
-                                                        <tr className="bg-gray-50 text-gray-400 uppercase tracking-wide text-[9px]">
-                                                            <th className="px-3 py-1.5 text-left w-12">Doss.</th>
-                                                            <th className="px-3 py-1.5 text-left">Participant</th>
-                                                            <th className="px-3 py-1.5 text-left w-28">Statut</th>
-                                                            <th className="px-3 py-1.5 text-left">Arrivée</th>
-                                                            <th className="px-3 py-1.5 w-10"></th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {loop.results.map(result => (
-                                                            <tr key={result.id} className="border-t border-gray-100">
-                                                                <td className="px-3 py-1.5 font-mono text-gray-500 text-[10px]">
-                                                                    #{result.bib_number}
-                                                                </td>
-                                                                <td className="px-3 py-1.5 text-gray-700">
-                                                                    {result.first_name} {result.last_name}
-                                                                </td>
-                                                                <td className="px-3 py-1.5">
-                                                                    <select
-                                                                        value={resultForms[result.id]?.status || ''}
-                                                                        onChange={e => setResultForms(f => ({
-                                                                            ...f,
-                                                                            [result.id]: { ...f[result.id], status: e.target.value },
-                                                                        }))}
-                                                                        className={`border px-1.5 py-0.5 text-[10px] ${
-                                                                            resultForms[result.id]?.status === 'finished'
-                                                                                ? 'border-green-300 bg-green-50 text-green-700'
-                                                                                : resultForms[result.id]?.status === 'dnf'
-                                                                                    ? 'border-red-300 bg-red-50 text-red-700'
-                                                                                    : 'border-blue-300 bg-blue-50 text-blue-700'
-                                                                        }`}
-                                                                    >
-                                                                        <option value="running">running</option>
-                                                                        <option value="finished">finished</option>
-                                                                        <option value="dnf">dnf</option>
-                                                                    </select>
-                                                                </td>
-                                                                <td className="px-3 py-1.5">
-                                                                    <input
-                                                                        type="datetime-local"
-                        step="1"
-                                                                        value={resultForms[result.id]?.finished_at || ''}
-                                                                        onChange={e => setResultForms(f => ({
-                                                                            ...f,
-                                                                            [result.id]: { ...f[result.id], finished_at: e.target.value },
-                                                                        }))}
-                                                                        className="border border-gray-300 px-1.5 py-0.5 text-[10px] w-40"
-                                                                    />
-                                                                </td>
-                                                                <td className="px-3 py-1.5">
-                                                                    <button
-                                                                        disabled={saving[`result-${result.id}`]}
-                                                                        onClick={save(`result-${result.id}`, () => apiFetch(
-                                                                            `/api/admin/race/super/results/${result.id}`, 'PATCH',
-                                                                            {
-                                                                                status:      resultForms[result.id]?.status,
-                                                                                finished_at: resultForms[result.id]?.finished_at || null,
-                                                                            }
-                                                                        ))}
-                                                                        className="bg-amber-600 text-white text-[9px] tracking-widest uppercase px-2 py-1 hover:bg-amber-700 disabled:opacity-50"
-                                                                    >
-                                                                        {saving[`result-${result.id}`] ? '…' : 'OK'}
-                                                                    </button>
-                                                                </td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </section>
-                        </>
-                    )}
-                </div>
-            )}
-        </div>
-    );
-}
-
-// ─── Main component ───────────────────────────────────────────────────────────
+// ─── Composant principal ──────────────────────────────────────────────────────
 
 export default function CourseSection() {
-    const [race, setRace]               = useState(null);
-    const [loading, setLoading]         = useState(true);
-    const [actionMsg, setActionMsg]     = useState(null);
-    const [actionErr, setActionErr]     = useState(null);
-    const [acting, setActing]           = useState(false);
-    const [elapsed, setElapsed]         = useState(0);
-    const [search, setSearch]           = useState('');
-    const [selectedLoop, setSelectedLoop]       = useState(null);
-    const [showGroupFinish, setShowGroupFinish] = useState(false);
+    const [state, setState] = useState(null);
+    const [error, setError] = useState(null);
+    const [busy, setBusy] = useState(false);
+    const [editing, setEditing] = useState(null); // { participant, loop }
+    const [, setNowTick] = useState(0);
 
-    const token = localStorage.getItem('admin_token');
-    const h = { Accept: 'application/json', Authorization: `Bearer ${token}` };
+    const token = typeof window !== 'undefined' ? localStorage.getItem('admin_token') : null;
 
-    const fetchRace = useCallback(async () => {
+    const refresh = useCallback(async () => {
         try {
-            const res = await fetch('/api/admin/race', { headers: h });
-            if (!res.ok) return;
-            setRace(await res.json());
-        } finally {
-            setLoading(false);
+            const r = await fetch('/api/race', { headers: { Accept: 'application/json' } });
+            if (!r.ok) throw new Error();
+            setState(await r.json());
+            setError(null);
+        } catch {
+            setError('Impossible de charger l\'état de la course.');
         }
     }, []);
 
-    // Poll plus rapide quand l'heure de départ est passée (scheduled → imminent)
-    const isImminent = race?.status === 'scheduled'
-        && race?.session?.scheduled_start_at
-        && new Date(race.session.scheduled_start_at) <= new Date();
-
-    // Fetch on mount + every 30s (ou 3s si départ imminent)
-    useEffect(() => {
-        fetchRace();
-        const interval = isImminent ? 3000 : 30000;
-        const id = setInterval(fetchRace, interval);
-        return () => clearInterval(id);
-    }, [fetchRace, isImminent]);
-
-    // Live timer — updates every second
-    // Le temps de référence théorique d'une boucle = départ course + (n° boucle - 1) * durée
-    useEffect(() => {
-        if (!race?.session?.started_at || !race?.current_loop?.loop_number) return;
-        const tick = () => {
-            const raceStartMs = new Date(race.session.started_at).getTime();
-            const loopDurMs   = (race.session.loop_duration_minutes ?? 60) * 60 * 1000;
-            const loopTheoStart = raceStartMs + (race.current_loop.loop_number - 1) * loopDurMs;
-            setElapsed(Math.floor((Date.now() - loopTheoStart) / 1000));
-        };
-        tick();
-        const id = setInterval(tick, 1000);
-        return () => clearInterval(id);
-    }, [race?.current_loop?.id, race?.session?.started_at, race?.session?.loop_duration_minutes]);
-
-    const post = async (url, confirm_msg) => {
-        if (confirm_msg && !window.confirm(confirm_msg)) return;
-        setActing(true);
-        setActionMsg(null);
-        setActionErr(null);
+    const call = useCallback(async (method, url, body) => {
+        setBusy(true);
         try {
-            const res = await fetch(url, { method: 'POST', headers: h });
-            const data = await res.json();
-            if (!res.ok) { setActionErr(data.message); return; }
-            setActionMsg(data.message);
-            await fetchRace();
-        } catch {
-            setActionErr('Une erreur est survenue.');
-        } finally {
-            setActing(false);
-        }
-    };
-
-    const postWithBody = async (url, body) => {
-        setActing(true);
-        setActionMsg(null);
-        setActionErr(null);
-        try {
-            const res = await fetch(url, {
-                method: 'POST',
-                headers: { ...h, 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+            const r = await fetch(url, {
+                method,
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                },
+                body: body ? JSON.stringify(body) : undefined,
             });
-            const data = await res.json();
-            if (!res.ok) { setActionErr(data.message); return; }
-            setActionMsg(data.message);
-            await fetchRace();
-        } catch {
-            setActionErr('Une erreur est survenue.');
+            const data = await r.json().catch(() => null);
+            if (!r.ok) throw new Error(data?.message || 'Erreur serveur');
+            setState(data);
+            setError(null);
+            return true;
+        } catch (e) {
+            setError(e.message || 'Erreur serveur');
+            return false;
         } finally {
-            setActing(false);
+            setBusy(false);
         }
-    };
+    }, [token]);
 
-    if (loading) return <p className="text-gris text-sm">Chargement…</p>;
+    // Chargement + polling (5 s pendant la course, 30 s sinon)
+    useEffect(() => { refresh(); }, [refresh]);
+    useEffect(() => {
+        const live = state?.race?.status === 'live';
+        const id = setInterval(refresh, live ? 5000 : 30000);
+        return () => clearInterval(id);
+    }, [state?.race?.status, refresh]);
 
-    // ── Scheduled ────────────────────────────────────────────────────────────
-    if (race?.status === 'scheduled') {
-        return (
-            <>
-                {(actionMsg || actionErr) && (
-                    <div className={`mb-4 text-xs px-4 py-2 border ${actionErr ? 'border-red-300 text-red-600 bg-red-50' : 'border-green-300 text-green-700 bg-green-50'}`}>
-                        {actionMsg || actionErr}
-                    </div>
-                )}
-                <Scheduled
-                    session={race.session}
-                    participantCount={race.participant_count ?? 0}
-                    onStartNow={() => post('/api/admin/race/start')}
-                    onCancel={async () => {
-                        if (!window.confirm('Annuler la programmation ?')) return;
-                        setActing(true);
-                        setActionMsg(null);
-                        setActionErr(null);
-                        try {
-                            const res = await fetch('/api/admin/race/schedule', { method: 'DELETE', headers: h });
-                            const data = await res.json();
-                            if (!res.ok) { setActionErr(data.message); return; }
-                            setActionMsg(data.message);
-                            await fetchRace();
-                        } catch { setActionErr('Une erreur est survenue.'); }
-                        finally { setActing(false); }
-                    }}
-                    loading={acting}
-                />
-            </>
-        );
+    // Horloge locale (compte à rebours)
+    useEffect(() => {
+        const id = setInterval(() => setNowTick((t) => t + 1), 1000);
+        return () => clearInterval(id);
+    }, []);
+
+    const serverClock = useMemo(() => makeServerClock(state?.server_now), [state?.server_now]);
+
+    // Actions
+    const saveParams   = (data) => call('PUT', '/api/admin/race', data);
+    const reset        = () => call('POST', '/api/admin/race/reset');
+    const arrive       = (participantId, loop, arrivedAt = null) =>
+        call('POST', '/api/admin/race/arrivals', { participant_id: participantId, loop_number: loop, arrived_at: arrivedAt });
+    const groupArrive  = (ids, loop, arrivedAt = null) =>
+        call('POST', '/api/admin/race/arrivals/group', { participant_ids: ids, loop_number: loop, arrived_at: arrivedAt });
+    const dnf          = (participantId, loop) =>
+        call('POST', '/api/admin/race/arrivals/dnf', { participant_id: participantId, loop_number: loop });
+    const clearCell    = (participantId, loop) =>
+        call('DELETE', '/api/admin/race/arrivals', { participant_id: participantId, loop_number: loop });
+
+    const openEditor = (participant, loop) => setEditing({ participant, loop });
+
+    if (!state) {
+        return <p className="text-sm text-gris py-8 text-center">Chargement…</p>;
     }
 
-    // ── Not started ──────────────────────────────────────────────────────────
-    if (!race || race.status === 'not_started') {
-        const count = race?.participant_count ?? race?.participants?.length ?? 0;
-        return (
-            <>
-                {(actionMsg || actionErr) && (
-                    <div className={`mb-4 text-xs px-4 py-2 border ${actionErr ? 'border-red-300 text-red-600 bg-red-50' : 'border-green-300 text-green-700 bg-green-50'}`}>
-                        {actionMsg || actionErr}
-                    </div>
-                )}
-                <NotStarted
-                    onStart={(duration) => postWithBody('/api/admin/race/start', { loop_duration_minutes: duration })}
-                    onSchedule={(body) => postWithBody('/api/admin/race/schedule', body)}
-                    participantCount={count}
-                    loading={acting}
-                />
-            </>
-        );
+    const { race, participants, stats } = state;
+
+    // Compte à rebours de la boucle en cours
+    let countdown = null;
+    if (race?.status === 'live' && race.current_loop_deadline) {
+        const remaining = Math.floor((new Date(race.current_loop_deadline).getTime() - serverClock().getTime()) / 1000);
+        countdown = fmtDur(Math.max(0, remaining));
+    }
+    let untilStart = null;
+    if (race?.status === 'pending' && race.start_at) {
+        const remaining = Math.floor((new Date(race.start_at).getTime() - serverClock().getTime()) / 1000);
+        if (remaining > 0) untilStart = fmtDur(remaining);
     }
 
-    const {
-        current_loop,
-        participants = [],
-        loop_history = [],
-        stats = {},
-        session,
-    } = race;
+    const statusLabel = { pending: 'En attente', live: 'En course', finished: 'Terminée' }[race?.status] ?? '—';
+    const leader = participants.length > 0 ? participants[0] : null;
 
-    const loopDuration = (session?.loop_duration_minutes ?? 60) * 60;
-    const overtime     = elapsed > loopDuration;
-    // Avertissement : dernières 5 min ou derniers 15% de la boucle (whichever is smaller)
-    const warnThreshold = Math.min(300, loopDuration * 0.15);
-    const warning      = !overtime && elapsed > loopDuration - warnThreshold;
-
-    const timerColor = overtime ? 'red' : warning ? 'orange' : 'gold';
-
-    const q = search.toLowerCase().trim();
-    const filteredRunning = participants.filter(
-        (p) => p.is_active && p.current_loop_status === 'running' &&
-            (!q || p.last_name.toLowerCase().includes(q) || String(p.bib_number).includes(q))
-    );
-    const finished   = participants.filter((p) => p.is_active && p.current_loop_status === 'finished')
-        .sort((a, b) => new Date(a.finished_at) - new Date(b.finished_at));
-    const eliminated = participants.filter((p) => !p.is_active);
-
-    // ── Race finished ────────────────────────────────────────────────────────
-    if (race.status === 'finished') {
-        return (
-            <>
-                <LoopDetailModal loop={selectedLoop} onClose={() => setSelectedLoop(null)} token={token} />
-                <div className="space-y-10">
-                <RaceFinished
-                    participants={participants}
-                    onReopen={() => post('/api/admin/race/reopen', 'Rouvrir la course en mode rattrapage ?')}
-                    loading={acting}
-                />
-                <LoopHistoryTable loops={loop_history} onLoopClick={setSelectedLoop} />
-                <EliminatedList participants={eliminated} />
-                <div className="pt-4 border-t border-gray-100">
-                    <button
-                        onClick={() => post('/api/admin/race/reset', 'Réinitialiser complètement la course ? Cette action est irréversible.')}
-                        disabled={acting}
-                        className="border border-red-300 text-red-600 text-[10px] tracking-[0.2em] uppercase px-4 py-2 hover:bg-red-50 transition-colors disabled:opacity-50"
-                    >
-                        Réinitialiser la course
-                    </button>
-                </div>
-            </div>
-            </>
-        );
-    }
-
-    // ── Active race ──────────────────────────────────────────────────────────
     return (
-        <div className="space-y-8">
-
-            {/* Feedback messages */}
-            {actionMsg && (
-                <div className="bg-green-50 border border-green-200 text-green-700 text-sm px-4 py-2">
-                    {actionMsg}
-                </div>
-            )}
-            {actionErr && (
-                <div className="bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-2">
-                    {actionErr}
+        <div className="space-y-4">
+            {error && (
+                <div className="border border-red-300 bg-red-50 text-red-700 text-sm px-4 py-2 flex items-center justify-between">
+                    <span>{error}</span>
+                    <button onClick={() => setError(null)} className="text-red-400 hover:text-red-700">✕</button>
                 </div>
             )}
 
-            {/* Stats row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {/* Stats */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <StatBox
+                    label="Statut"
+                    value={statusLabel}
+                    sub={race?.status === 'pending' && untilStart ? `Départ dans ${untilStart}` : race?.start_at ? fmtDateTime(race.start_at) : 'Paramètres à définir'}
+                    color={race?.status === 'live' ? 'green' : race?.status === 'finished' ? 'gold' : 'default'}
+                />
                 <StatBox
                     label="Boucle"
-                    value={current_loop?.loop_number ?? '—'}
-                    sub={`Départ ${fmtTime(current_loop?.started_at)}`}
-                    color="gold"
-                />
-                <StatBox
-                    label={overtime ? 'Dépassement' : 'Temps écoulé'}
-                    value={fmt(elapsed)}
-                    sub={`/ ${fmt(loopDuration)}`}
-                    color={timerColor}
+                    value={race?.status === 'live' ? `${race.current_loop}/${race.max_loops}` : '—'}
+                    sub={countdown ? `Temps restant : ${countdown}` : null}
+                    color={race?.status === 'live' ? 'gold' : 'default'}
                 />
                 <StatBox
                     label="En course"
-                    value={participants.filter((p) => p.is_active && p.current_loop_status === 'running').length}
-                    sub="encore sur la boucle"
+                    value={`${stats.in_race}/${stats.total}`}
+                    color={race?.status === 'live' ? 'green' : 'default'}
                 />
                 <StatBox
-                    label="Boucle terminée"
-                    value={finished.length}
-                    sub={`${eliminated.length} éliminé${eliminated.length !== 1 ? 's' : ''} au total`}
-                    color={finished.length > 0 ? 'green' : 'default'}
+                    label={stats.winner ? 'Vainqueur' : 'Leader'}
+                    value={stats.winner ? stats.winner.name : leader && leader.loops_completed > 0 ? `${leader.first_name} ${leader.last_name}` : '—'}
+                    sub={stats.winner ? `${stats.winner.loops} boucles` : leader?.loops_completed > 0 ? `${leader.loops_completed} boucle${leader.loops_completed > 1 ? 's' : ''}` : null}
+                    color={stats.winner ? 'gold' : 'default'}
                 />
             </div>
 
-            {/* Actions */}
-            <div className="flex flex-wrap items-center gap-3 pb-4 border-b border-gray-100">
-                <button
-                    onClick={() => post(
-                        '/api/admin/race/next-loop',
-                        filteredRunning.length > 0
-                            ? `${filteredRunning.length} participant(s) sont encore en course. Démarrer la boucle suivante quand même ?`
-                            : 'Démarrer la boucle suivante ?'
-                    )}
-                    disabled={acting}
-                    className="bg-or-principal text-creme text-[11px] tracking-[0.2em] uppercase px-6 py-2.5 hover:bg-or-sombre transition-colors disabled:opacity-50"
-                >
-                    {acting ? 'En cours…' : `Boucle ${(current_loop?.loop_number ?? 0) + 1} →`}
-                </button>
-                <button
-                    onClick={() => post(
-                        '/api/admin/race/reset',
-                        'Réinitialiser complètement la course ? Cette action est irréversible.'
-                    )}
-                    disabled={acting}
-                    className="border border-red-300 text-red-600 text-[10px] tracking-[0.2em] uppercase px-4 py-2.5 hover:bg-red-50 transition-colors disabled:opacity-50"
-                >
-                    Réinitialiser
-                </button>
-                <span className="text-xs text-gris ml-auto">
-                    Actualisation auto toutes les 30 s
-                </span>
-            </div>
+            <ParamsPanel race={race} busy={busy} onSave={saveParams} onReset={reset} />
 
-            {/* Running participants */}
-            <div className="space-y-3">
-                <div className="flex items-center justify-between gap-4">
-                    <h3 className="text-[11px] tracking-[0.2em] uppercase text-gris">
-                        En course — {participants.filter((p) => p.is_active && p.current_loop_status === 'running').length} participant(s)
-                    </h3>
-                    <div className="flex items-center gap-2">
-                        <button
-                            onClick={() => setShowGroupFinish((s) => !s)}
-                            className={`text-[10px] tracking-[0.15em] uppercase px-3 py-1.5 border transition-colors ${
-                                showGroupFinish
-                                    ? 'border-or-principal bg-or-principal text-creme'
-                                    : 'border-or-clair text-or-sombre hover:bg-or-clair'
-                            }`}
-                        >
-                            ≡ Arrivée groupée
-                        </button>
-                        <input
-                            type="search"
-                            placeholder="N° ou nom…"
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                            className="border border-gray-200 bg-creme px-3 py-1.5 text-sm text-noir focus:outline-none focus:border-or-principal transition-colors w-40"
-                        />
-                    </div>
-                </div>
+            {race?.status === 'live' && (
+                <PointagePanel
+                    state={state}
+                    busy={busy}
+                    onArrive={arrive}
+                    onGroupArrive={groupArrive}
+                    onDnf={dnf}
+                    onEditCell={openEditor}
+                />
+            )}
 
-                {showGroupFinish && (
-                    <GroupFinishPanel
-                        runningParticipants={participants.filter((p) => p.is_active && p.current_loop_status === 'running')}
-                        token={token}
-                        onDone={() => { setShowGroupFinish(false); fetchRace(); }}
-                        onClose={() => setShowGroupFinish(false)}
-                    />
-                )}
-
-                {filteredRunning.length === 0 ? (
-                    <p className="text-gris text-sm">
-                        {search ? 'Aucun résultat.' : 'Tous les participants ont terminé la boucle.'}
-                    </p>
-                ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                        {filteredRunning
-                            .sort((a, b) => a.bib_number - b.bib_number)
-                            .map((p) => (
-                                <RunningCard
-                                    key={p.id}
-                                    p={p}
-                                    onFinish={() => post(`/api/admin/race/participants/${p.id}/finish`)}
-                                    onFinishWithTime={(time) => postWithBody(`/api/admin/race/participants/${p.id}/finish`, { finished_at: time })}
-                                    onDnf={() => post(
-                                        `/api/admin/race/participants/${p.id}/dnf`,
-                                        `Confirmer DNF pour #${p.bib_number} ${p.last_name} ?`
-                                    )}
-                                    loading={acting}
-                                />
-                            ))}
-                    </div>
-                )}
-            </div>
-
-            {/* Finishers this loop */}
-            {finished.length > 0 && (
-                <div>
-                    <h3 className="text-[11px] tracking-[0.2em] uppercase text-gris mb-3">
-                        Boucle terminée — {finished.length} participant(s)
-                    </h3>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                        {finished.map((p) => (
-                            <FinisherBadge key={p.id} p={p} />
-                        ))}
-                    </div>
+            {race?.status === 'finished' && stats.winner && (
+                <div className="border border-or-principal bg-creme p-4 text-center">
+                    <p className="text-[10px] tracking-[0.3em] uppercase text-or-principal">Dernier survivant</p>
+                    <p className="font-chau text-2xl text-noir mt-1">🏆 {stats.winner.name}</p>
+                    <p className="text-xs text-gris mt-1">#{stats.winner.bib_number} — {stats.winner.loops} boucles validées</p>
                 </div>
             )}
 
-            {/* Loop history */}
-            {loop_history.length > 0 && (
-                <LoopHistoryTable loops={loop_history} onLoopClick={setSelectedLoop} />
+            {race && <GridPanel state={state} onEditCell={openEditor} />}
+
+            {!race && (
+                <p className="text-sm text-gris text-center py-6">
+                    Aucune course configurée. Renseignez les paramètres ci-dessus pour commencer.
+                </p>
             )}
 
-            {/* Loop detail modal */}
-            <LoopDetailModal loop={selectedLoop} onClose={() => setSelectedLoop(null)} token={token} />
-
-            {/* Eliminated */}
-            <EliminatedList
-                participants={eliminated}
-                currentLoopNumber={current_loop?.loop_number}
-                onRestore={(p) => post(`/api/admin/race/participants/${p.id}/restore`, `Remettre #${p.bib_number} ${p.last_name} en lice ?`)}
-                loading={acting}
-            />
-
-            {/* Super Admin */}
-            <SuperAdminPanel token={token} onRefresh={fetchRace} />
+            {editing && (
+                <CellEditor
+                    race={race}
+                    participant={editing.participant}
+                    loop={editing.loop}
+                    cell={editing.participant.loops?.[editing.loop - 1]}
+                    busy={busy}
+                    onSave={async (arrivedAt) => {
+                        const ok = await arrive(editing.participant.id, editing.loop, arrivedAt);
+                        if (ok) setEditing(null);
+                    }}
+                    onDnf={async () => {
+                        const ok = await dnf(editing.participant.id, editing.loop);
+                        if (ok) setEditing(null);
+                    }}
+                    onClear={async () => {
+                        const ok = await clearCell(editing.participant.id, editing.loop);
+                        if (ok) setEditing(null);
+                    }}
+                    onClose={() => setEditing(null)}
+                />
+            )}
         </div>
     );
 }
