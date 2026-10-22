@@ -1,0 +1,31 @@
+# PRODUCTION (VPS, dans /srv/sites/backyard) — à lancer avec :
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Le site n'ouvre aucun port : le Caddy commun (/srv/infra) lui transmet les
+# visites via le réseau Docker « web ». Base : le MySQL partagé (hôte « mysql »).
+# Réglages et mots de passe : fichier .env (jamais versionné).
+name: backyard
+
+services:
+    app:
+        build:
+            context: .
+            dockerfile: docker/prod/Dockerfile
+        image: backyard:latest
+        container_name: backyard-app
+        restart: unless-stopped
+        env_file: .env
+        environment:
+            DB_HOST: mysql
+            SERVER_NAME: ':80'
+        volumes:
+            - storage:/app/storage/app
+        networks:
+            - web
+
+networks:
+    web:
+        external: true
+
+volumes:
+    storage:

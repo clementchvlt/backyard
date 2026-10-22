@@ -1,0 +1,5 @@
+# Site La Backyard des Mools (conteneur « backyard-app »).
+# À copier dans /srv/infra/sites/ sur le VPS.
+la-backyard-des-mools.fr, www.la-backyard-des-mools.fr {
+	reverse_proxy backyard-app:80
+}
